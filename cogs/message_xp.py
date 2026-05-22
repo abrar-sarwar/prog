@@ -25,6 +25,7 @@ from core.constants import (
     MIN_MESSAGE_LENGTH,
     TEXT_XP_MAX,
     TEXT_XP_MIN,
+    levelup_message,
 )
 from core.multipliers import compute_final_xp
 from db import crud
@@ -121,12 +122,14 @@ class MessageXP(commands.Cog):
         new_level: int,
         level_up_channel_id: int | None,
     ) -> None:
-        """Post a level-up embed.
+        """Post a level-up message that pings the member.
 
         Target resolution: ``guild_config.level_up_channel_id`` if set; else
-        the channel the triggering message was sent in.
+        the channel the triggering message was sent in. Only the leveled-up
+        user is pinged - role/@everyone pings are disabled.
         """
         assert message.guild is not None
+        assert isinstance(message.author, discord.Member)
         target: discord.abc.Messageable = message.channel
         if level_up_channel_id is not None:
             configured = message.guild.get_channel(level_up_channel_id)
@@ -136,15 +139,14 @@ class MessageXP(commands.Cog):
             ):
                 target = configured
 
-        embed = discord.Embed(
-            title="Level up!",
-            description=(
-                f"**{message.author.display_name}** reached level **{new_level}**."
-            ),
-            color=discord.Color.green(),
-        )
+        content = levelup_message(new_level).format(mention=message.author.mention)
         try:
-            await target.send(embed=embed)
+            await target.send(
+                content=content,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True, roles=False, everyone=False
+                ),
+            )
         except discord.Forbidden:
             log.warning(
                 "missing permission to post level-up message in guild %s",

@@ -39,6 +39,7 @@ from core.constants import (
     FREEZE_DATE,
     LEADERBOARD_HOUR,
     LEADERBOARD_TIMEZONE,
+    LEADERBOARD_TOP_N,
     LEADERBOARD_WEEKDAY,
 )
 from db import crud
@@ -71,9 +72,8 @@ def _build_embed(
         rank = i + 1
         member = guild.get_member(row.user_id)
         name = member.display_name if member is not None else f"Unknown ({row.user_id})"
-        lines.append(
-            f"**#{rank}** · {name} — level {row.level} ({row.xp:,} XP)"
-        )
+        # XP is intentionally not shown - public surface is rank + level only.
+        lines.append(f"**#{rank}** · {name} · Level {row.level}")
     description = "\n".join(lines) if lines else "_no XP earned yet_"
 
     embed = discord.Embed(
@@ -208,9 +208,11 @@ class LeaderboardChannel(commands.Cog):
             )
             return
 
-        # Fetch top 10 and total count
+        # Fetch the top N (constant shared with the /leaderboard command).
         async with get_session_factory()() as session:
-            top_users = list(await crud.get_top_users(session, guild.id, limit=10))
+            top_users = list(
+                await crud.get_top_users(session, guild.id, limit=LEADERBOARD_TOP_N)
+            )
             await session.commit()
 
         embed = _build_embed(guild, top_users, today)

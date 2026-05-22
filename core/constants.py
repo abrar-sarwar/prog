@@ -56,10 +56,57 @@ LEADERBOARD_WEEKDAY: int = 5
 LEADERBOARD_HOUR: int = 12
 """Hour-of-day (24h) when the weekly update fires."""
 
-LEADERBOARD_PAGE_SIZE: int = 10
-"""Number of users per page in ``/leaderboard``."""
+LEADERBOARD_TOP_N: int = 5
+"""How many users are shown in ``/leaderboard`` and the weekly channel post."""
 
 FREEZE_DATE: date = date(2026, 8, 15)
 """After this date (strictly), the public leaderboard channel stops updating
 and the top-of-leaderboard role assignment stops being recomputed. XP itself
 keeps accruing forever."""
+
+
+# --- Level-up announcement messages -----------------------------------------
+
+_LEVELUP_NOOB = "{mention} congrats you lvl up, keep grinding your way noob"
+_LEVELUP_KNIGHT = "{mention} congrats you lvl up, knight your way up to get swore"
+_LEVELUP_PROGMASTER = (
+    "{mention} congrats you lvl up, now keep progging to become a progmaster"
+)
+_LEVELUP_9_TO_5 = "{mention} congrats you lvl up, get back to your 9-5 already"
+_LEVELUP_GRASS = (
+    "{mention} congrats you lvl up, can you see green? you're close to grasses"
+)
+_LEVELUP_FINAL = "{mention} yay you reached the final lvl, do you got a j*b yet or no"
+
+
+def levelup_message(new_level: int) -> str:
+    """Return the level-up message template for the given new level.
+
+    The returned string contains a ``{mention}`` placeholder which the caller
+    must format with ``member.mention``.
+
+    Band mapping:
+
+    * 1-10  -> noob message
+    * 11-20 -> knight message
+    * 21-30 -> progmaster message
+    * 31-40 -> 9-to-5 message
+    * 41-49 -> grass message
+    * 50    -> final-level message
+
+    Levels outside 1-50 (e.g. 51+, or any defensive 0/negative input) fall
+    back to the 41-49 grass message, so the helper is total over int.
+    """
+    if 1 <= new_level <= 10:
+        return _LEVELUP_NOOB
+    if 11 <= new_level <= 20:
+        return _LEVELUP_KNIGHT
+    if 21 <= new_level <= 30:
+        return _LEVELUP_PROGMASTER
+    if 31 <= new_level <= 40:
+        return _LEVELUP_9_TO_5
+    if 41 <= new_level <= 49:
+        return _LEVELUP_GRASS
+    if new_level == 50:
+        return _LEVELUP_FINAL
+    return _LEVELUP_GRASS

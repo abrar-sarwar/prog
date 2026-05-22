@@ -3,9 +3,8 @@
 ``/rank`` shows a single member's level, total XP, in-level progress bar,
 and server rank.
 
-``/leaderboard`` shows a paginated top-N (10 per page) view with prev/next
-buttons. The invoker's own rank is always shown in the footer, even if they
-are off-page.
+``/leaderboard`` shows a single static embed with the top 5 members. The
+invoker's own rank is shown in the footer.
 """
 
 from __future__ import annotations
@@ -17,8 +16,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core.constants import LEADERBOARD_PAGE_SIZE
-from core.leveling import cumulative_xp_to_level, xp_for_level
+from core.constants import LEADERBOARD_TOP_N
+from core.leveling import cumulative_xp_to_level
 from db import crud
 from db.engine import get_session_factory
 from db.models import User
@@ -37,121 +36,37 @@ def _progress_bar(filled: int, width: int = _PROGRESS_BAR_WIDTH) -> str:
 def _format_leaderboard_line(
     rank: int, member: discord.Member | None, user_id: int, row: User
 ) -> str:
-    """Render one leaderboard line."""
+    """Render one leaderboard line. XP is intentionally not shown - the
+    leaderboard surfaces ranks and levels only; the precise XP number is
+    private and lives behind ``/rank``."""
     name = member.display_name if member is not None else f"Unknown ({user_id})"
-    return f"**#{rank}** · {name} — level {row.level} ({row.xp:,} XP)"
+    return f"**#{rank}** · {name} · Level {row.level}"
 
 
 async def _build_leaderboard_embed(
-    guild: discord.Guild,
-    invoker_id: int,
-    page: int,
-    page_size: int,
+    guild: discord.Guild, invoker_id: int
 ) -> discord.Embed:
-    """Build the embed for one page of the leaderboard."""
-    offset = page * page_size
+    """Build the static top-N leaderboard embed for a guild."""
     async with get_session_factory()() as session:
         rows: Sequence[User] = await crud.get_top_users(
-            session, guild.id, limit=page_size, offset=offset
+            session, guild.id, limit=LEADERBOARD_TOP_N
         )
-        total = await crud.count_users_in_guild(session, guild.id)
         invoker_rank = await crud.get_user_rank(session, guild.id, invoker_id)
-
-    total_pages = max(1, (total + page_size - 1) // page_size)
 
     lines: list[str] = []
     for i, row in enumerate(rows):
-        global_rank = offset + i + 1
+        rank = i + 1
         member = guild.get_member(row.user_id)
-        lines.append(_format_leaderboard_line(global_rank, member, row.user_id, row))
+        lines.append(_format_leaderboard_line(rank, member, row.user_id, row))
 
     embed = discord.Embed(
         title=f"Leaderboard — {guild.name}",
-        description="\n".join(lines) if lines else "_(this page is empty)_",
+        description="\n".join(lines) if lines else "_(no entries yet)_",
         color=discord.Color.gold(),
     )
-    footer = f"Page {page + 1}/{total_pages}"
     if invoker_rank is not None:
-        footer += f"  ·  You: #{invoker_rank}"
-    embed.set_footer(text=footer)
+        embed.set_footer(text=f"You: #{invoker_rank}")
     return embed
-
-
-class LeaderboardView(discord.ui.View):
-    """Pagination view bound to a single invoker.
-
-    Disables itself on timeout. Other users get an ephemeral 'not yours'
-    response if they click.
-    """
-
-    def __init__(
-        self,
-        *,
-        invoker_id: int,
-        guild_id: int,
-        total_count: int,
-        page_size: int = LEADERBOARD_PAGE_SIZE,
-    ) -> None:
-        super().__init__(timeout=120)
-        self.invoker_id = invoker_id
-        self.guild_id = guild_id
-        self.page = 0
-        self.page_size = page_size
-        self.total_pages = max(1, (total_count + page_size - 1) // page_size)
-        self.message: discord.Message | None = None
-        self._refresh_buttons()
-
-    def _refresh_buttons(self) -> None:
-        """Enable/disable prev and next buttons based on the current page."""
-        self.prev_button.disabled = self.page <= 0
-        self.next_button.disabled = self.page >= self.total_pages - 1
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Restrict button presses to the original invoker."""
-        if interaction.user.id != self.invoker_id:
-            await interaction.response.send_message(
-                "This isn't your leaderboard view - run `/leaderboard` yourself.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
-    async def prev_button(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ) -> None:
-        """Move to the previous page and re-render the embed."""
-        self.page -= 1
-        self._refresh_buttons()
-        assert interaction.guild is not None
-        embed = await _build_leaderboard_embed(
-            interaction.guild, self.invoker_id, self.page, self.page_size
-        )
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
-    async def next_button(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ) -> None:
-        """Move to the next page and re-render the embed."""
-        self.page += 1
-        self._refresh_buttons()
-        assert interaction.guild is not None
-        embed = await _build_leaderboard_embed(
-            interaction.guild, self.invoker_id, self.page, self.page_size
-        )
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def on_timeout(self) -> None:
-        """Disable all buttons in place when the view times out."""
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 class UserCommands(commands.Cog):
@@ -230,35 +145,19 @@ class UserCommands(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(
-        name="leaderboard", description="Show the server XP leaderboard"
+        name="leaderboard", description="Show the top of the server"
     )
     async def leaderboard(self, interaction: discord.Interaction) -> None:
-        """Paginated guild XP leaderboard."""
+        """Static top-5 leaderboard with no pagination."""
         if interaction.guild is None:
             await interaction.response.send_message(
                 "Use this in a server.", ephemeral=True
             )
             return
-
-        guild = interaction.guild
-        invoker_id = interaction.user.id
-        async with get_session_factory()() as session:
-            total = await crud.count_users_in_guild(session, guild.id)
-
-        if total == 0:
-            await interaction.response.send_message(
-                "No XP earned in this server yet.", ephemeral=True
-            )
-            return
-
-        view = LeaderboardView(
-            invoker_id=invoker_id, guild_id=guild.id, total_count=total
-        )
         embed = await _build_leaderboard_embed(
-            guild, invoker_id, page=0, page_size=LEADERBOARD_PAGE_SIZE
+            interaction.guild, interaction.user.id
         )
-        await interaction.response.send_message(embed=embed, view=view)
-        view.message = await interaction.original_response()
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:

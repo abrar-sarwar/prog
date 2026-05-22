@@ -330,6 +330,14 @@ async def count_users_in_guild(session: AsyncSession, guild_id: int) -> int:
     return int((await session.execute(stmt)).scalar_one())
 
 
+async def list_users_in_guild(
+    session: AsyncSession, guild_id: int
+) -> Sequence[User]:
+    """Return every user row for this guild, unordered. Used by /resync-roles."""
+    stmt = select(User).where(User.guild_id == guild_id)
+    return (await session.execute(stmt)).scalars().all()
+
+
 async def get_user_rank(
     session: AsyncSession, guild_id: int, user_id: int
 ) -> int | None:

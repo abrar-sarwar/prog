@@ -23,7 +23,11 @@ import discord
 from discord.ext import commands, tasks
 
 from cogs.onboarding import ensure_member_initialized
-from core.constants import VOICE_XP_PER_TICK, VOICE_XP_TICK_SECONDS
+from core.constants import (
+    VOICE_XP_PER_TICK,
+    VOICE_XP_TICK_SECONDS,
+    levelup_message,
+)
 from core.multipliers import compute_final_xp
 from db import crud
 from db.engine import get_session_factory
@@ -141,13 +145,15 @@ class VoiceXP(commands.Cog):
         new_level: int,
         level_up_channel_id: int | None,
     ) -> None:
-        """Post the level-up embed for a voice-driven level-up.
+        """Post a level-up message that pings the member.
 
         Target resolution (per spec section 6):
 
         1. ``guild_config.level_up_channel_id`` if set
         2. else ``guild.system_channel``
         3. else skip silently
+
+        Only the leveled-up user is pinged - role/@everyone pings are disabled.
         """
         guild = member.guild
         target: discord.abc.Messageable | None = None
@@ -160,15 +166,14 @@ class VoiceXP(commands.Cog):
         if target is None:
             return
 
-        embed = discord.Embed(
-            title="Level up!",
-            description=(
-                f"**{member.display_name}** reached level **{new_level}**."
-            ),
-            color=discord.Color.green(),
-        )
+        content = levelup_message(new_level).format(mention=member.mention)
         try:
-            await target.send(embed=embed)
+            await target.send(
+                content=content,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True, roles=False, everyone=False
+                ),
+            )
         except discord.Forbidden:
             log.warning(
                 "missing permission to post voice level-up in guild %s",
