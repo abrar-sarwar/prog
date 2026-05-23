@@ -25,7 +25,7 @@ from core.constants import (
     MIN_MESSAGE_LENGTH,
     TEXT_XP_MAX,
     TEXT_XP_MIN,
-    levelup_message,
+    level_up_message,
 )
 from core.multipliers import compute_final_xp
 from db import crud
@@ -108,6 +108,11 @@ class MessageXP(commands.Cog):
             change.new_level,
         )
 
+        # Every successful grant invalidates the leaderboard cache. The
+        # leaderboard cog debounces these and only edits Discord when the
+        # rendered top-N actually differs.
+        self.bot.dispatch("xp_grant", guild_id)
+
         if change.leveled_up:
             await self._announce_level_up(message, change.new_level, level_up_channel_id)
             # Notify the rewards cog (and anyone else listening) so ladder
@@ -139,7 +144,7 @@ class MessageXP(commands.Cog):
             ):
                 target = configured
 
-        content = levelup_message(new_level).format(mention=message.author.mention)
+        content = level_up_message(new_level, message.author.mention)
         try:
             await target.send(
                 content=content,

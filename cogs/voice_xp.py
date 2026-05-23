@@ -26,7 +26,7 @@ from cogs.onboarding import ensure_member_initialized
 from core.constants import (
     VOICE_XP_PER_TICK,
     VOICE_XP_TICK_SECONDS,
-    levelup_message,
+    level_up_message,
 )
 from core.multipliers import compute_final_xp
 from db import crud
@@ -131,6 +131,11 @@ class VoiceXP(commands.Cog):
             change.new_level,
         )
 
+        # Every successful grant invalidates the leaderboard cache. The
+        # leaderboard cog debounces these and only edits Discord when the
+        # rendered top-N actually differs.
+        self.bot.dispatch("xp_grant", member.guild.id)
+
         if change.leveled_up:
             await self._announce_level_up(
                 member, change.new_level, level_up_channel_id
@@ -166,7 +171,7 @@ class VoiceXP(commands.Cog):
         if target is None:
             return
 
-        content = levelup_message(new_level).format(mention=member.mention)
+        content = level_up_message(new_level, member.mention)
         try:
             await target.send(
                 content=content,

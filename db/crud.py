@@ -338,6 +338,55 @@ async def list_users_in_guild(
     return (await session.execute(stmt)).scalars().all()
 
 
+async def get_users_around_rank(
+    session: AsyncSession,
+    guild_id: int,
+    target_rank: int,
+    window: int = 5,
+) -> tuple[int, Sequence[User]]:
+    """Return ``(start_rank, users)`` for a window of size ``window`` centered
+    on ``target_rank``, with edge clamping at both ends.
+
+    ``start_rank`` is the 1-indexed absolute rank of the first returned row
+    so the caller can render rank numbers correctly without recomputing the
+    offset.
+
+    Examples (window=5):
+
+    * 10 users, target=3   -> (1, ranks 1-5)
+    * 10 users, target=8   -> (6, ranks 6-10)
+    * 10 users, target=10  -> (6, ranks 6-10)   # top-edge clamp
+    * 3 users, target=2    -> (1, ranks 1-3)    # fewer rows than window
+
+    Uses the standard leaderboard ordering (xp DESC, id ASC). One COUNT
+    plus one SELECT per call.
+    """
+    total = int(
+        (
+            await session.execute(
+                select(func.count(User.id)).where(User.guild_id == guild_id)
+            )
+        ).scalar_one()
+    )
+    if total == 0:
+        return (1, [])
+
+    half = (window - 1) // 2
+    desired_offset = (target_rank - 1) - half
+    max_offset = max(0, total - window)
+    offset = max(0, min(desired_offset, max_offset))
+
+    stmt = (
+        select(User)
+        .where(User.guild_id == guild_id)
+        .order_by(User.xp.desc(), User.id.asc())
+        .limit(window)
+        .offset(offset)
+    )
+    users = (await session.execute(stmt)).scalars().all()
+    return (offset + 1, users)
+
+
 async def get_user_rank(
     session: AsyncSession, guild_id: int, user_id: int
 ) -> int | None:

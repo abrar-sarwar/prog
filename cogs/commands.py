@@ -3,8 +3,15 @@
 ``/rank`` shows a single member's level, total XP, in-level progress bar,
 and server rank.
 
-``/leaderboard`` shows a single static embed with the top 5 members. The
-invoker's own rank is shown in the footer.
+``/leaderboard`` shows a sliding window of 5 entries centered on the invoker:
+
+* invoker ranked #1, #2, or #3 -> ranks 1-5
+* invoker ranked middle -> invoker's rank +/- 2 (invoker in the middle row)
+* invoker in the bottom 2 -> last 5 ranks
+* fewer than 5 users with XP -> all of them
+* invoker has no XP row -> top 5, with a "not on the board yet" footer
+
+The invoker's own row is visually emphasised with a leading arrow and bold.
 """
 
 from __future__ import annotations
@@ -25,6 +32,9 @@ from db.models import User
 log = logging.getLogger(__name__)
 
 _PROGRESS_BAR_WIDTH: int = 10
+_NOT_ON_BOARD_FOOTER: str = (
+    "You're not on the board yet — send a message to earn XP."
+)
 
 
 def _progress_bar(filled: int, width: int = _PROGRESS_BAR_WIDTH) -> str:
@@ -33,39 +43,53 @@ def _progress_bar(filled: int, width: int = _PROGRESS_BAR_WIDTH) -> str:
     return "▓" * filled + "░" * (width - filled)
 
 
-def _format_leaderboard_line(
-    rank: int, member: discord.Member | None, user_id: int, row: User
+def _format_row(
+    rank: int,
+    member: discord.Member | None,
+    row: User,
+    *,
+    is_invoker: bool,
 ) -> str:
-    """Render one leaderboard line. XP is intentionally not shown - the
-    leaderboard surfaces ranks and levels only; the precise XP number is
-    private and lives behind ``/rank``."""
-    name = member.display_name if member is not None else f"Unknown ({user_id})"
+    """Render one leaderboard row. The invoker's own row is prefixed with
+    ``▸`` and the whole line is bolded."""
+    name = member.display_name if member is not None else f"Unknown ({row.user_id})"
+    if is_invoker:
+        return f"▸ **#{rank} · {name} · Level {row.level}**"
     return f"**#{rank}** · {name} · Level {row.level}"
 
 
 async def _build_leaderboard_embed(
     guild: discord.Guild, invoker_id: int
 ) -> discord.Embed:
-    """Build the static top-N leaderboard embed for a guild."""
+    """Build the sliding-window leaderboard embed for ``invoker_id``."""
     async with get_session_factory()() as session:
-        rows: Sequence[User] = await crud.get_top_users(
-            session, guild.id, limit=LEADERBOARD_TOP_N
-        )
         invoker_rank = await crud.get_user_rank(session, guild.id, invoker_id)
+        if invoker_rank is None:
+            start_rank = 1
+            users: Sequence[User] = await crud.get_top_users(
+                session, guild.id, limit=LEADERBOARD_TOP_N
+            )
+            footer = _NOT_ON_BOARD_FOOTER
+        else:
+            start_rank, users = await crud.get_users_around_rank(
+                session, guild.id, invoker_rank, window=LEADERBOARD_TOP_N
+            )
+            footer = f"You: #{invoker_rank}"
 
     lines: list[str] = []
-    for i, row in enumerate(rows):
-        rank = i + 1
+    for i, row in enumerate(users):
+        rank = start_rank + i
         member = guild.get_member(row.user_id)
-        lines.append(_format_leaderboard_line(rank, member, row.user_id, row))
+        lines.append(
+            _format_row(rank, member, row, is_invoker=(row.user_id == invoker_id))
+        )
 
     embed = discord.Embed(
-        title=f"Leaderboard — {guild.name}",
+        title=f"🏆 {guild.name} Leaderboard",
         description="\n".join(lines) if lines else "_(no entries yet)_",
         color=discord.Color.gold(),
     )
-    if invoker_rank is not None:
-        embed.set_footer(text=f"You: #{invoker_rank}")
+    embed.set_footer(text=footer)
     return embed
 
 
@@ -145,10 +169,11 @@ class UserCommands(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(
-        name="leaderboard", description="Show the top of the server"
+        name="leaderboard",
+        description="Show a 5-entry leaderboard centered on you.",
     )
     async def leaderboard(self, interaction: discord.Interaction) -> None:
-        """Static top-5 leaderboard with no pagination."""
+        """Sliding-window top-5 leaderboard centered on the invoker."""
         if interaction.guild is None:
             await interaction.response.send_message(
                 "Use this in a server.", ephemeral=True

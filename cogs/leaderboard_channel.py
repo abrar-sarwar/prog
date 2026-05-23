@@ -1,46 +1,49 @@
-"""Weekly leaderboard channel updater.
+"""Persistent top-N leaderboard channel embed.
 
-A 1-minute polling loop wakes every minute and, if it is Saturday between
-12:00 and 12:01 PM ``America/New_York``, runs the weekly update across every
-guild that has a leaderboard channel configured. ``zoneinfo`` handles the
-EDT/EST switch automatically.
+The leaderboard message in each guild's configured leaderboard channel is a
+single embed that prog keeps in sync with the current top N. There is no
+schedule - updates are driven by ``xp_grant`` events.
 
-Each update:
+How it stays in sync
+--------------------
+1. On startup, ``on_ready`` populates an in-memory cache of the current
+   top-N per guild (one query per guild that has a leaderboard channel set).
+   This prevents a spurious "everything changed" edit on the first event
+   after restart.
+2. After every successful XP grant, ``cogs.message_xp`` and ``cogs.voice_xp``
+   dispatch ``xp_grant(guild_id)``. The listener here re-queries the top N
+   and compares it (order-sensitively) to the cache. If they differ, it
+   schedules a debounced edit (``LEADERBOARD_DEBOUNCE_SECONDS``); further
+   events in the debounce window reset the timer.
+3. A safety poll (``LEADERBOARD_SAFETY_POLL_MINUTES``) runs every N minutes
+   and force-re-checks every configured guild, in case any dispatch was
+   missed (bot restart between dispatch and edit, dropped event, etc.).
+4. ``/force-leaderboard-update`` bypasses the cache comparison entirely and
+   pushes a fresh edit.
 
-1. Edits the message at ``leaderboard_message_id`` (or sends a new one if
-   that is null or the message has been deleted).
-2. Reassigns the role registered at ``role_rewards.level == 0`` to whoever
-   is currently #1, removing it from anyone else who has it.
+Top-of-leaderboard role (``role_rewards.level == 0``) is reassigned every
+time the top-N actually changes.
 
-Freeze logic (``FREEZE_DATE = 2026-08-15``):
-
-* ``today < FREEZE_DATE``  → update with ``"Final standings: August 15, 2026"`` footer
-* ``today == FREEZE_DATE`` → run **one final update** with ``"🏆 Final standings — leaderboard frozen"`` footer
-* ``today > FREEZE_DATE``  → do nothing
-
-XP itself never freezes - only this public post does.
-
-``/force-leaderboard-update`` bypasses the day/time check but still respects
-the freeze date.
+This module deliberately holds NO Saturday-noon scheduler and no freeze
+date - the previous spec called for those, but the current spec is
+change-driven.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Sequence
-from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
 from core.constants import (
-    FREEZE_DATE,
-    LEADERBOARD_HOUR,
-    LEADERBOARD_TIMEZONE,
+    LEADERBOARD_DEBOUNCE_SECONDS,
+    LEADERBOARD_SAFETY_POLL_MINUTES,
     LEADERBOARD_TOP_N,
-    LEADERBOARD_WEEKDAY,
 )
 from db import crud
 from db.engine import get_session_factory
@@ -48,31 +51,30 @@ from db.models import User
 
 log = logging.getLogger(__name__)
 
-_EASTERN = ZoneInfo(LEADERBOARD_TIMEZONE)
-_FOOTER_PRE_FREEZE = "Final standings: August 15, 2026"
-_FOOTER_FROZEN = "🏆 Final standings — leaderboard frozen"
+
+# Cache key: an ordered tuple of (user_id, level) per position. Comparison is
+# order-sensitive, so a position swap within the top N counts as a change.
+# We deliberately do NOT include XP - if XP changed but level + ordering did
+# not, the rendered embed is byte-identical and there's no point editing.
+CacheKey = tuple[tuple[int, int], ...]
 
 
-def _today_eastern() -> date:
-    """Return today's date in the leaderboard timezone."""
-    return datetime.now(tz=_EASTERN).date()
+def _make_cache_key(top_users: Sequence[User]) -> CacheKey:
+    """Build the comparable cache key from a list of top-N user rows."""
+    return tuple((u.user_id, u.level) for u in top_users)
 
 
-def _is_after_freeze(today: date) -> bool:
-    """True when today is strictly after the freeze date (do-nothing branch)."""
-    return today > FREEZE_DATE
+def _build_embed(guild: discord.Guild, top_users: Sequence[User]) -> discord.Embed:
+    """Render the persistent leaderboard embed.
 
-
-def _build_embed(
-    guild: discord.Guild, top_users: Sequence[User], today: date
-) -> discord.Embed:
-    """Render one guild's leaderboard embed for the given day."""
+    Format: ``**#N** · <display name> · Level X``. Display name avoids
+    pinging members on every edit (a mention would). No XP is shown.
+    """
     lines: list[str] = []
     for i, row in enumerate(top_users):
         rank = i + 1
         member = guild.get_member(row.user_id)
         name = member.display_name if member is not None else f"Unknown ({row.user_id})"
-        # XP is intentionally not shown - public surface is rank + level only.
         lines.append(f"**#{rank}** · {name} · Level {row.level}")
     description = "\n".join(lines) if lines else "_no XP earned yet_"
 
@@ -82,30 +84,36 @@ def _build_embed(
         color=discord.Color.gold(),
         timestamp=datetime.now(tz=timezone.utc),
     )
-    if today >= FREEZE_DATE:
-        embed.set_footer(text=_FOOTER_FROZEN)
-    else:
-        embed.set_footer(text=_FOOTER_PRE_FREEZE)
     return embed
 
 
 class LeaderboardChannel(commands.Cog):
-    """Background updater + ``/force-leaderboard-update`` command."""
+    """Persistent leaderboard updater + ``/force-leaderboard-update``."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.saturday_tick.start()
+        # guild_id -> last-rendered cache key. Populated on startup, mutated
+        # whenever we push an edit.
+        self._cache: dict[int, CacheKey] = {}
+        # guild_id -> pending debounce task. Cancelled and replaced when a
+        # new event arrives within the debounce window.
+        self._debounce_tasks: dict[int, asyncio.Task[None]] = {}
+        self.safety_poll.start()
 
     def cog_unload(self) -> None:
-        """Cancel the background loop when the cog is unloaded."""
-        self.saturday_tick.cancel()
+        """Cancel the safety poll and any pending debounce timers."""
+        self.safety_poll.cancel()
+        for task in self._debounce_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._debounce_tasks.clear()
 
     async def cog_app_command_error(
         self,
         interaction: discord.Interaction,
         error: app_commands.AppCommandError,
     ) -> None:
-        """Per-cog error handler for the force-update slash command."""
+        """Convert command errors into clean ephemeral replies."""
         if isinstance(error, app_commands.MissingPermissions):
             msg = "You need the **Manage Server** permission for this."
         elif isinstance(error, app_commands.CheckFailure):
@@ -119,114 +127,120 @@ class LeaderboardChannel(commands.Cog):
             await interaction.followup.send(msg, ephemeral=True)
 
     # ------------------------------------------------------------------
-    # Scheduling
+    # Startup: populate cache so first event after restart isn't a false
+    # positive.
     # ------------------------------------------------------------------
 
-    @tasks.loop(minutes=1)
-    async def saturday_tick(self) -> None:
-        """Once-a-minute schedule check. Fires update at Saturday 12:00 ET."""
-        now = datetime.now(tz=_EASTERN)
-        if (
-            now.weekday() != LEADERBOARD_WEEKDAY
-            or now.hour != LEADERBOARD_HOUR
-            or now.minute != 0
-        ):
-            return
-        log.info(
-            "Saturday-noon trigger fired (%s); running weekly leaderboard update",
-            now.isoformat(),
-        )
-        await self._run_update(force=False)
-
-    @saturday_tick.before_loop
-    async def _before_loop(self) -> None:
-        """Hold the loop until the gateway handshake completes."""
-        await self.bot.wait_until_ready()
-
-    # ------------------------------------------------------------------
-    # Update logic (used by both scheduler and /force-leaderboard-update)
-    # ------------------------------------------------------------------
-
-    async def _run_update(self, *, force: bool) -> tuple[bool, int]:
-        """Run the update for every configured guild.
-
-        Returns ``(updated, guild_count)`` - ``updated`` is False if the
-        freeze date has passed (nothing to do), ``guild_count`` is how many
-        guilds were processed (only meaningful when ``updated`` is True).
-        """
-        today = _today_eastern()
-        if _is_after_freeze(today):
-            log.info(
-                "leaderboard %supdate skipped: today %s > freeze %s (frozen)",
-                "force-" if force else "",
-                today,
-                FREEZE_DATE,
-            )
-            return (False, 0)
-
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """Populate the in-memory cache from the DB on each ready."""
         async with get_session_factory()() as session:
             configs = await crud.list_guild_configs_with_leaderboard_channel(session)
-            snapshots = [
-                (c.guild_id, c.leaderboard_channel_id, c.leaderboard_message_id)
-                for c in configs
-            ]
-            await session.commit()
-
-        processed = 0
-        for guild_id, channel_id, message_id in snapshots:
-            guild = self.bot.get_guild(guild_id)
-            if guild is None:
-                log.warning("guild %s has leaderboard config but bot is not in it", guild_id)
-                continue
-            if channel_id is None:
-                continue  # safety; the query already filters this out
-            try:
-                await self._update_guild(guild, channel_id, message_id, today)
-                processed += 1
-            except Exception as exc:
-                log.exception(
-                    "leaderboard update failed for guild %s: %s",
-                    guild_id,
-                    exc,
+            for cfg in configs:
+                top = await crud.get_top_users(
+                    session, cfg.guild_id, limit=LEADERBOARD_TOP_N
                 )
-        return (True, processed)
+                self._cache[cfg.guild_id] = _make_cache_key(top)
+        log.info(
+            "leaderboard cache populated on ready: %d guild(s)", len(self._cache)
+        )
 
-    async def _update_guild(
-        self,
-        guild: discord.Guild,
-        channel_id: int,
-        message_id: int | None,
-        today: date,
+    # ------------------------------------------------------------------
+    # Event-driven path: xp_grant -> debounce -> compare -> maybe edit
+    # ------------------------------------------------------------------
+
+    @commands.Cog.listener()
+    async def on_xp_grant(self, guild_id: int) -> None:
+        """Schedule a debounced cache-comparison for this guild."""
+        self._schedule_debounced(guild_id)
+
+    def _schedule_debounced(self, guild_id: int) -> None:
+        """Cancel any pending debounce for ``guild_id`` and arm a new one."""
+        existing = self._debounce_tasks.get(guild_id)
+        if existing is not None and not existing.done():
+            existing.cancel()
+        self._debounce_tasks[guild_id] = asyncio.create_task(
+            self._debounce_then_check(guild_id)
+        )
+
+    async def _debounce_then_check(self, guild_id: int) -> None:
+        """Sleep, then run the cache comparison. Cancellation aborts cleanly."""
+        try:
+            await asyncio.sleep(LEADERBOARD_DEBOUNCE_SECONDS)
+            await self._check_and_maybe_update(guild_id, force=False)
+        except asyncio.CancelledError:
+            # A newer event arrived inside the debounce window; that newer
+            # event's task will run the check instead.
+            pass
+        except Exception as exc:
+            log.exception(
+                "leaderboard debounce check failed for guild %s: %s", guild_id, exc
+            )
+
+    async def _check_and_maybe_update(
+        self, guild_id: int, *, force: bool
     ) -> None:
-        """Update one guild's leaderboard message and top-1 role."""
-        channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
+        """Re-query the top N for this guild and edit Discord if it differs
+        from the cached state (or unconditionally if ``force``)."""
+        async with get_session_factory()() as session:
+            top = list(
+                await crud.get_top_users(session, guild_id, limit=LEADERBOARD_TOP_N)
+            )
+        new_key = _make_cache_key(top)
+        cached = self._cache.get(guild_id)
+        if not force and cached == new_key:
+            return  # No visible change - skip the Discord edit entirely.
+
+        log.info(
+            "leaderboard change detected in guild %s (force=%s): %s -> %s",
+            guild_id,
+            force,
+            cached,
+            new_key,
+        )
+        # Update the cache BEFORE pushing so a concurrent event doesn't
+        # double-fire on the same delta if the API call is slow.
+        self._cache[guild_id] = new_key
+        await self._push_update(guild_id, top)
+
+    async def _push_update(
+        self, guild_id: int, top_users: Sequence[User]
+    ) -> None:
+        """Edit (or send) the leaderboard message and reassign the top-1 role."""
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
             log.warning(
-                "leaderboard channel %s for guild %s is missing or not a text channel",
-                channel_id,
-                guild.id,
+                "leaderboard update: guild %s has cached state but bot is not in it",
+                guild_id,
             )
             return
 
-        # Fetch the top N (constant shared with the /leaderboard command).
         async with get_session_factory()() as session:
-            top_users = list(
-                await crud.get_top_users(session, guild.id, limit=LEADERBOARD_TOP_N)
-            )
-            await session.commit()
+            config = await crud.get_guild_config(session, guild_id)
+        if config is None or config.leaderboard_channel_id is None:
+            return  # Leaderboard channel got unset between schedule and push.
 
-        embed = _build_embed(guild, top_users, today)
-        new_message = await self._edit_or_send(channel, message_id, embed)
+        channel = guild.get_channel(config.leaderboard_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            log.warning(
+                "leaderboard channel %s for guild %s missing or not a text channel",
+                config.leaderboard_channel_id,
+                guild_id,
+            )
+            return
+
+        embed = _build_embed(guild, top_users)
+        new_message = await self._edit_or_send(
+            channel, config.leaderboard_message_id, embed
+        )
         if new_message is None:
             return
 
-        # Persist a new message ID if we created the message instead of editing.
-        if new_message.id != message_id:
+        if new_message.id != config.leaderboard_message_id:
             async with get_session_factory()() as session:
-                await crud.set_leaderboard_message(session, guild.id, new_message.id)
+                await crud.set_leaderboard_message(session, guild_id, new_message.id)
                 await session.commit()
 
-        # Reassign the top-of-leaderboard role.
         await self._reassign_top_role(guild, top_users)
 
     async def _edit_or_send(
@@ -235,9 +249,8 @@ class LeaderboardChannel(commands.Cog):
         message_id: int | None,
         embed: discord.Embed,
     ) -> discord.Message | None:
-        """Edit the existing leaderboard message in ``channel`` if it still
-        exists; otherwise send a fresh one. Returns the resulting message, or
-        None on failure."""
+        """Edit the existing leaderboard message if it still exists; otherwise
+        send a fresh one. Returns the resulting message, or None on failure."""
         if message_id is not None:
             try:
                 msg = await channel.fetch_message(message_id)
@@ -276,9 +289,8 @@ class LeaderboardChannel(commands.Cog):
         """Give the level-0 role to the current #1 and strip it from anyone else."""
         async with get_session_factory()() as session:
             top_role_row = await crud.get_role_reward(session, guild.id, 0)
-            await session.commit()
         if top_role_row is None:
-            return  # No top-of-leaderboard role configured for this guild.
+            return  # No top-of-leaderboard role configured.
 
         role = guild.get_role(top_role_row.role_id)
         if role is None:
@@ -291,13 +303,12 @@ class LeaderboardChannel(commands.Cog):
 
         top_user_id: int | None = top_users[0].user_id if top_users else None
 
-        # Strip the role from anyone who has it but isn't the current #1.
         for member in list(role.members):
             if member.id == top_user_id:
                 continue
             try:
                 await member.remove_roles(
-                    role, reason="prog: weekly leaderboard reassignment"
+                    role, reason="prog: leaderboard top-1 reassignment"
                 )
             except discord.Forbidden:
                 log.warning(
@@ -307,12 +318,9 @@ class LeaderboardChannel(commands.Cog):
                 )
             except discord.HTTPException as exc:
                 log.warning(
-                    "HTTP error removing top-1 role from %s: %s",
-                    member.id,
-                    exc,
+                    "HTTP error removing top-1 role from %s: %s", member.id, exc
                 )
 
-        # Add the role to the current #1 if they're still in the guild.
         if top_user_id is None:
             return
         top_member = guild.get_member(top_user_id)
@@ -328,7 +336,7 @@ class LeaderboardChannel(commands.Cog):
             return
         try:
             await top_member.add_roles(
-                role, reason="prog: weekly leaderboard reassignment"
+                role, reason="prog: leaderboard top-1 reassignment"
             )
         except discord.Forbidden:
             log.warning(
@@ -340,12 +348,36 @@ class LeaderboardChannel(commands.Cog):
             log.warning("HTTP error adding top-1 role: %s", exc)
 
     # ------------------------------------------------------------------
+    # Safety poll: full re-check every N minutes
+    # ------------------------------------------------------------------
+
+    @tasks.loop(minutes=LEADERBOARD_SAFETY_POLL_MINUTES)
+    async def safety_poll(self) -> None:
+        """Periodic full re-check across every guild with a leaderboard channel."""
+        async with get_session_factory()() as session:
+            configs = await crud.list_guild_configs_with_leaderboard_channel(session)
+        for cfg in configs:
+            try:
+                await self._check_and_maybe_update(cfg.guild_id, force=False)
+            except Exception as exc:
+                log.exception(
+                    "safety_poll: leaderboard check failed for guild %s: %s",
+                    cfg.guild_id,
+                    exc,
+                )
+
+    @safety_poll.before_loop
+    async def _before_safety_poll(self) -> None:
+        """Hold the loop until the gateway handshake completes."""
+        await self.bot.wait_until_ready()
+
+    # ------------------------------------------------------------------
     # /force-leaderboard-update
     # ------------------------------------------------------------------
 
     @app_commands.command(
         name="force-leaderboard-update",
-        description="Run the weekly leaderboard update right now (testing).",
+        description="Force a leaderboard re-evaluation and push right now.",
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
@@ -353,19 +385,12 @@ class LeaderboardChannel(commands.Cog):
     async def force_leaderboard_update(
         self, interaction: discord.Interaction
     ) -> None:
-        """Force a leaderboard refresh. Still respects ``FREEZE_DATE``."""
+        """Bypass the cache comparison and push a fresh edit."""
+        assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True, thinking=True)
-        updated, processed = await self._run_update(force=True)
-        if not updated:
-            await interaction.followup.send(
-                f"Leaderboard is frozen (today > {FREEZE_DATE.isoformat()}); "
-                "no update was run.",
-                ephemeral=True,
-            )
-            return
+        await self._check_and_maybe_update(interaction.guild.id, force=True)
         await interaction.followup.send(
-            f"Leaderboard updated for {processed} guild(s).",
-            ephemeral=True,
+            "Leaderboard re-evaluated and pushed.", ephemeral=True
         )
 
 
