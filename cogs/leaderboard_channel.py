@@ -152,13 +152,23 @@ class LeaderboardChannel(commands.Cog):
     @commands.Cog.listener()
     async def on_xp_grant(self, guild_id: int) -> None:
         """Schedule a debounced cache-comparison for this guild."""
+        log.info("leaderboard update triggered for guild %s", guild_id)
         self._schedule_debounced(guild_id)
 
     def _schedule_debounced(self, guild_id: int) -> None:
         """Cancel any pending debounce for ``guild_id`` and arm a new one."""
         existing = self._debounce_tasks.get(guild_id)
         if existing is not None and not existing.done():
+            log.info(
+                "leaderboard debounce: cancelling pending timer for guild %s",
+                guild_id,
+            )
             existing.cancel()
+        log.info(
+            "leaderboard debounce: arming %.1fs timer for guild %s",
+            LEADERBOARD_DEBOUNCE_SECONDS,
+            guild_id,
+        )
         self._debounce_tasks[guild_id] = asyncio.create_task(
             self._debounce_then_check(guild_id)
         )
@@ -167,11 +177,18 @@ class LeaderboardChannel(commands.Cog):
         """Sleep, then run the cache comparison. Cancellation aborts cleanly."""
         try:
             await asyncio.sleep(LEADERBOARD_DEBOUNCE_SECONDS)
+            log.info(
+                "leaderboard debounce: timer fired for guild %s, running check",
+                guild_id,
+            )
             await self._check_and_maybe_update(guild_id, force=False)
         except asyncio.CancelledError:
             # A newer event arrived inside the debounce window; that newer
             # event's task will run the check instead.
-            pass
+            log.info(
+                "leaderboard debounce: task for guild %s cancelled (newer event)",
+                guild_id,
+            )
         except Exception as exc:
             log.exception(
                 "leaderboard debounce check failed for guild %s: %s", guild_id, exc
@@ -188,15 +205,23 @@ class LeaderboardChannel(commands.Cog):
             )
         new_key = _make_cache_key(top)
         cached = self._cache.get(guild_id)
-        if not force and cached == new_key:
-            return  # No visible change - skip the Discord edit entirely.
-
         log.info(
-            "leaderboard change detected in guild %s (force=%s): %s -> %s",
+            "leaderboard check guild=%s force=%s cached=%s fresh=%s",
             guild_id,
             force,
             cached,
             new_key,
+        )
+        if not force and cached == new_key:
+            log.info(
+                "leaderboard check guild=%s: cached == fresh, no update needed",
+                guild_id,
+            )
+            return  # No visible change - skip the Discord edit entirely.
+
+        log.info(
+            "leaderboard check guild=%s: change detected, pushing edit",
+            guild_id,
         )
         # Update the cache BEFORE pushing so a concurrent event doesn't
         # double-fire on the same delta if the API call is slow.
