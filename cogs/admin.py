@@ -4,8 +4,10 @@ All commands require the ``Manage Server`` permission and are guild-only. The
 ``default_permissions`` decorator hides them from non-mods in the Discord UI;
 the ``has_permissions`` check enforces it server-side as defence in depth.
 
-XP/level mutators dispatch the ``level_change`` event after commit so the
-rewards cog can re-evaluate ladder roles for the affected member.
+XP/level mutators always dispatch ``xp_grant`` (so the leaderboard cog
+invalidates its cache and updates the persistent embed) and additionally
+dispatch ``level_change`` when the level actually moved (so the rewards
+cog can re-evaluate ladder roles).
 """
 
 from __future__ import annotations
@@ -72,13 +74,21 @@ class Admin(commands.Cog):
         except discord.InteractionResponded:
             await interaction.followup.send(msg, ephemeral=True)
 
-    async def _dispatch_if_changed(
+    async def _dispatch_after_xp_change(
         self,
         member: discord.Member,
         old_level: int,
         new_level: int,
     ) -> None:
-        """Fire ``level_change`` so the rewards cog picks up the transition."""
+        """Fire ``xp_grant`` (always) and ``level_change`` (only on a level
+        delta) after any admin XP/level mutation.
+
+        * ``xp_grant`` invalidates the leaderboard cache so the persistent
+          embed updates within ~3 seconds (debounced).
+        * ``level_change`` lets the rewards cog reassign ladder roles when
+          the level actually moved.
+        """
+        self.bot.dispatch("xp_grant", member.guild.id)
         if old_level != new_level:
             self.bot.dispatch("level_change", member, old_level, new_level)
 
@@ -111,7 +121,7 @@ class Admin(commands.Cog):
                 session, interaction.guild.id, user.id, amount
             )
             await session.commit()
-        await self._dispatch_if_changed(user, change.old_level, change.new_level)
+        await self._dispatch_after_xp_change(user, change.old_level, change.new_level)
 
         await interaction.response.send_message(
             embed=discord.Embed(
@@ -150,7 +160,7 @@ class Admin(commands.Cog):
                 session, interaction.guild.id, user.id, -amount
             )
             await session.commit()
-        await self._dispatch_if_changed(user, change.old_level, change.new_level)
+        await self._dispatch_after_xp_change(user, change.old_level, change.new_level)
 
         await interaction.response.send_message(
             embed=discord.Embed(
@@ -189,7 +199,7 @@ class Admin(commands.Cog):
                 session, interaction.guild.id, user.id, amount
             )
             await session.commit()
-        await self._dispatch_if_changed(user, change.old_level, change.new_level)
+        await self._dispatch_after_xp_change(user, change.old_level, change.new_level)
 
         await interaction.response.send_message(
             embed=discord.Embed(
@@ -230,7 +240,7 @@ class Admin(commands.Cog):
                 session, interaction.guild.id, user.id, level
             )
             await session.commit()
-        await self._dispatch_if_changed(user, change.old_level, change.new_level)
+        await self._dispatch_after_xp_change(user, change.old_level, change.new_level)
 
         await interaction.response.send_message(
             embed=discord.Embed(
