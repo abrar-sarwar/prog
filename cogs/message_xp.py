@@ -25,8 +25,8 @@ from core.constants import (
     MIN_MESSAGE_LENGTH,
     TEXT_XP_MAX,
     TEXT_XP_MIN,
-    level_up_message,
 )
+from core.leveling import LEVEL_CAP, get_level_message
 from core.multipliers import compute_final_xp
 from db import crud
 from db.engine import get_session_factory
@@ -93,6 +93,15 @@ class MessageXP(commands.Cog):
             change = await crud.add_text_xp(
                 session, guild_id, author.id, final_xp, now
             )
+            # Snapshot the Aura flag BEFORE potentially flipping it so the
+            # announcer can tell whether this is the first time crossing 100.
+            aura_already_fired = change.user.aura_message_fired
+            if (
+                change.leveled_up
+                and change.new_level >= LEVEL_CAP
+                and not aura_already_fired
+            ):
+                change.user.aura_message_fired = True
             level_up_channel_id = config.level_up_channel_id
             await session.commit()
 
@@ -114,7 +123,17 @@ class MessageXP(commands.Cog):
         self.bot.dispatch("xp_grant", guild_id)
 
         if change.leveled_up:
-            await self._announce_level_up(message, change.new_level, level_up_channel_id)
+            # Suppress the level-up message when the user crosses to LEVEL_CAP
+            # for a second time (e.g. dropped below and climbed back). The
+            # Aura template is the only one for level 100, and per spec we
+            # never re-fire it.
+            suppress = (
+                change.new_level >= LEVEL_CAP and aura_already_fired
+            )
+            if not suppress:
+                await self._announce_level_up(
+                    message, change.new_level, level_up_channel_id
+                )
             # Notify the rewards cog (and anyone else listening) so ladder
             # roles can be reassigned.
             self.bot.dispatch(
@@ -131,7 +150,8 @@ class MessageXP(commands.Cog):
 
         Target resolution: ``guild_config.level_up_channel_id`` if set; else
         the channel the triggering message was sent in. Only the leveled-up
-        user is pinged - role/@everyone pings are disabled.
+        user is pinged - role and @everyone pings are always disabled (the
+        Aura template's dramatic copy stands on its own without a ping).
         """
         assert message.guild is not None
         assert isinstance(message.author, discord.Member)
@@ -144,7 +164,8 @@ class MessageXP(commands.Cog):
             ):
                 target = configured
 
-        content = level_up_message(new_level, message.author.mention)
+        template = get_level_message(new_level)
+        content = template.format(user=message.author.mention, level=new_level)
         try:
             await target.send(
                 content=content,

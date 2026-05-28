@@ -15,7 +15,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Integer, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Integer,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -28,8 +35,8 @@ class User(Base):
     """Per-(guild, user) cumulative XP and level cache.
 
     ``xp`` is the total cumulative XP earned across all sources. ``level`` is
-    a cache of :func:`core.leveling.level_from_xp` for the current ``xp``;
-    callers must keep them in sync.
+    a cache of :func:`core.leveling.level_from_total_xp` for the current
+    ``xp``; callers must keep them in sync.
     """
 
     __tablename__ = "users"
@@ -44,7 +51,7 @@ class User(Base):
         BigInteger, nullable=False, default=0, server_default=text("0")
     )
     level: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default=text("1")
+        Integer, nullable=False, default=0, server_default=text("0")
     )
     last_message_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -55,6 +62,12 @@ class User(Base):
     text_xp_total: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default=text("0")
     )
+    aura_message_fired: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    """One-shot flag for the level-100 Aura announcement. Once set, the
+    Aura message will never re-fire for this (guild, user), even if the
+    user drops below 100 and climbs back."""
 
 
 class GuildConfig(Base):

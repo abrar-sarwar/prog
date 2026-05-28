@@ -26,8 +26,8 @@ from cogs.onboarding import ensure_member_initialized
 from core.constants import (
     VOICE_XP_PER_TICK,
     VOICE_XP_TICK_SECONDS,
-    level_up_message,
 )
+from core.leveling import LEVEL_CAP, get_level_message
 from core.multipliers import compute_final_xp
 from db import crud
 from db.engine import get_session_factory
@@ -117,6 +117,15 @@ class VoiceXP(commands.Cog):
             change = await crud.add_voice_xp(
                 session, member.guild.id, member.id, final_xp
             )
+            # Snapshot the Aura flag BEFORE flipping it so the announcer
+            # can tell whether this is the first time crossing 100.
+            aura_already_fired = change.user.aura_message_fired
+            if (
+                change.leveled_up
+                and change.new_level >= LEVEL_CAP
+                and not aura_already_fired
+            ):
+                change.user.aura_message_fired = True
             await session.commit()
 
         log.info(
@@ -137,9 +146,13 @@ class VoiceXP(commands.Cog):
         self.bot.dispatch("xp_grant", member.guild.id)
 
         if change.leveled_up:
-            await self._announce_level_up(
-                member, change.new_level, level_up_channel_id
+            suppress = (
+                change.new_level >= LEVEL_CAP and aura_already_fired
             )
+            if not suppress:
+                await self._announce_level_up(
+                    member, change.new_level, level_up_channel_id
+                )
             self.bot.dispatch(
                 "level_change", member, change.old_level, change.new_level
             )
@@ -158,7 +171,8 @@ class VoiceXP(commands.Cog):
         2. else ``guild.system_channel``
         3. else skip silently
 
-        Only the leveled-up user is pinged - role/@everyone pings are disabled.
+        Only the leveled-up user is pinged - role and @everyone pings are
+        always disabled.
         """
         guild = member.guild
         target: discord.abc.Messageable | None = None
@@ -171,7 +185,8 @@ class VoiceXP(commands.Cog):
         if target is None:
             return
 
-        content = level_up_message(new_level, member.mention)
+        template = get_level_message(new_level)
+        content = template.format(user=member.mention, level=new_level)
         try:
             await target.send(
                 content=content,

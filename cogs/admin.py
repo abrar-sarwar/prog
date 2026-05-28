@@ -8,6 +8,21 @@ XP/level mutators always dispatch ``xp_grant`` (so the leaderboard cog
 invalidates its cache and updates the persistent embed) and additionally
 dispatch ``level_change`` when the level actually moved (so the rewards
 cog can re-evaluate ladder roles).
+
+Rank-change announcements
+-------------------------
+After every admin XP/level mutation, the cog calls
+:func:`core.leveling.admin_rank_change_action` to decide whether to post
+a level-up announcement and which template to use. Only one message
+fires - for the band the user ended up in - and only on a net positive
+level change. Demotions are silent. Level 100 (Aura) respects the
+one-shot ``aura_message_fired`` flag.
+
+``/migrate-rank-roles`` is a one-shot helper that renames legacy ladder
+roles (prognoob/progknight/gitsworn/progmaster/gitalife) to the new
+tier names and remaps their ``role_rewards`` thresholds (11->10, 21->20,
+31->30, 41->40) so existing role bindings keep working under the new
+band layout.
 """
 
 from __future__ import annotations
@@ -20,9 +35,31 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs.onboarding import ensure_member_initialized
-from core.constants import LEVEL_ROLE_NAMES
+from core.leveling import (
+    LEVEL_CAP,
+    TIER_BANDS,
+    admin_rank_change_action,
+    get_level_message,
+)
 from db import crud
 from db.engine import get_session_factory
+
+
+# Threshold-level -> tier role name, derived from TIER_BANDS so the source
+# of truth stays in one place. Used for /setup-roles hints and /show-config.
+LEVEL_ROLE_HINTS: dict[int, str] = {lo: role for lo, _hi, _name, role in TIER_BANDS}
+
+# Legacy ladder roles from the previous tier system. (old_name, old_threshold,
+# new_name, new_threshold). The migration helper renames Discord roles found
+# by ``old_name`` to ``new_name`` and updates role_rewards rows so the
+# corresponding ``old_threshold`` becomes ``new_threshold``.
+_LEGACY_ROLE_MIGRATIONS: list[tuple[str, int, str, int]] = [
+    ("prognoob", 1, "Freshie", 1),
+    ("progknight", 11, "Viber", 10),
+    ("gitsworn", 21, "Innovator", 20),
+    ("progmaster", 31, "Hustler", 30),
+    ("gitalife", 41, "Yapper", 40),
+]
 
 log = logging.getLogger(__name__)
 
@@ -80,17 +117,104 @@ class Admin(commands.Cog):
         old_level: int,
         new_level: int,
     ) -> None:
-        """Fire ``xp_grant`` (always) and ``level_change`` (only on a level
-        delta) after any admin XP/level mutation.
+        """Run all post-mutation side effects for an admin XP/level change.
 
-        * ``xp_grant`` invalidates the leaderboard cache so the persistent
-          embed updates within ~3 seconds (debounced).
-        * ``level_change`` lets the rewards cog reassign ladder roles when
-          the level actually moved.
+        Steps:
+
+        1. Dispatch ``xp_grant`` so the leaderboard cog re-evaluates the
+           cached top-N within the debounce window.
+        2. Dispatch ``level_change`` (only on a level delta) so the
+           rewards cog swaps the member's tier role.
+        3. Resolve and post the level-up announcement per spec - one
+           message at the *new* level only, silent on demotion, silent on
+           Aura re-fires (the one-shot flag wins even for admins).
+        4. Persist the Aura flag on the first-ever crossing to LEVEL_CAP.
+
+        The Aura flag and the level-up channel are read in a single
+        post-mutation snapshot. This is safe because the admin mutation
+        we just committed never touches ``aura_message_fired``, so the
+        flag still reflects its pre-mutation state.
         """
         self.bot.dispatch("xp_grant", member.guild.id)
         if old_level != new_level:
             self.bot.dispatch("level_change", member, old_level, new_level)
+
+        async with get_session_factory()() as session:
+            config = await crud.get_or_create_guild_config(
+                session, member.guild.id
+            )
+            user_row = await crud.get_user(session, member.guild.id, member.id)
+            await session.commit()
+        aura_already_fired = (
+            user_row.aura_message_fired if user_row is not None else False
+        )
+        level_up_channel_id = config.level_up_channel_id
+
+        action = admin_rank_change_action(
+            old_level=old_level,
+            new_level=new_level,
+            aura_already_fired=aura_already_fired,
+        )
+        if not action.fire_message:
+            return
+
+        if action.set_aura_flag:
+            # Persist the flag *before* posting so a crash between the
+            # message and the DB write can't cause a double-fire on the
+            # next admin grant.
+            async with get_session_factory()() as session:
+                await crud.mark_aura_message_fired(
+                    session, member.guild.id, member.id
+                )
+                await session.commit()
+
+        await self._post_announcement(
+            member, action.message_level, level_up_channel_id
+        )
+
+    async def _post_announcement(
+        self,
+        member: discord.Member,
+        level: int,
+        announce_channel_id: int | None,
+    ) -> None:
+        """Send the tier template for ``level`` to the configured level-up
+        channel (or the guild's system channel as a fallback)."""
+        guild = member.guild
+        target: discord.abc.Messageable | None = None
+        if announce_channel_id is not None:
+            ch = guild.get_channel(announce_channel_id)
+            if isinstance(
+                ch,
+                (discord.TextChannel, discord.VoiceChannel, discord.Thread),
+            ):
+                target = ch
+        if target is None:
+            target = guild.system_channel
+        if target is None:
+            log.info(
+                "admin rank-change for %s: no level-up channel configured "
+                "and no system channel - skipping announcement",
+                member.id,
+            )
+            return
+
+        template = get_level_message(level)
+        content = template.format(user=member.mention, level=level)
+        try:
+            await target.send(
+                content=content,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True, roles=False, everyone=False
+                ),
+            )
+        except discord.Forbidden:
+            log.warning(
+                "missing permission to post admin level-up in guild %s",
+                guild.id,
+            )
+        except discord.HTTPException as exc:
+            log.warning("HTTP error posting admin level-up: %s", exc)
 
     # ------------------------------------------------------------------
     # XP manipulation
@@ -216,7 +340,10 @@ class Admin(commands.Cog):
         name="level-set",
         description="Set a member's level (snaps XP to that level's minimum)",
     )
-    @app_commands.describe(user="Member to update", level="Target level (>= 1)")
+    @app_commands.describe(
+        user="Member to update",
+        level=f"Target level (0..{LEVEL_CAP}; clamped to {LEVEL_CAP})",
+    )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -224,7 +351,7 @@ class Admin(commands.Cog):
         self,
         interaction: discord.Interaction,
         user: discord.Member,
-        level: app_commands.Range[int, 1, 10_000],
+        level: app_commands.Range[int, 0, LEVEL_CAP],
     ) -> None:
         """Set the member to the minimum XP for ``level``."""
         assert interaction.guild is not None
@@ -262,7 +389,10 @@ class Admin(commands.Cog):
         description="Assign a role to a level (level 0 = top-of-leaderboard role)",
     )
     @app_commands.describe(
-        level="Level threshold (0 for top-of-leaderboard; 1, 11, 21, 31, 41 are ladder)",
+        level=(
+            "Level threshold (0 = top-of-leaderboard; "
+            "1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 are tier roles)"
+        ),
         role="Role to grant at this level",
     )
     @app_commands.guild_only()
@@ -282,7 +412,7 @@ class Admin(commands.Cog):
             )
             await session.commit()
 
-        suggested = LEVEL_ROLE_NAMES.get(level)
+        suggested = LEVEL_ROLE_HINTS.get(level)
         label = f"Level {level}"
         if suggested is not None:
             label += f" (`{suggested}` slot)"
@@ -546,7 +676,7 @@ class Admin(commands.Cog):
         if rewards:
             lines = []
             for r in rewards:
-                hint = LEVEL_ROLE_NAMES.get(r.level)
+                hint = LEVEL_ROLE_HINTS.get(r.level)
                 tag = f" (`{hint}` slot)" if hint else (
                     " (top-of-leaderboard slot)" if r.level == 0 else ""
                 )
@@ -606,6 +736,150 @@ class Admin(commands.Cog):
             )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ------------------------------------------------------------------
+    # /migrate-rank-roles - one-shot legacy-role rename + threshold remap
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="migrate-rank-roles",
+        description=(
+            "Rename legacy ladder roles to the new tier names and remap "
+            "their thresholds. Safe to run repeatedly."
+        ),
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def migrate_rank_roles(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Rename old-name Discord roles in place and remap role_rewards
+        thresholds. Idempotent: a second run is a no-op once everything
+        is on the new naming/threshold scheme."""
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        guild = interaction.guild
+        renamed: list[str] = []
+        rename_skipped: list[str] = []
+        remapped: list[str] = []
+        remap_skipped: list[str] = []
+
+        for old_name, old_thresh, new_name, new_thresh in _LEGACY_ROLE_MIGRATIONS:
+            await self._migrate_one_role(
+                guild,
+                old_name,
+                new_name,
+                renamed=renamed,
+                skipped=rename_skipped,
+            )
+            await self._migrate_one_threshold(
+                guild.id,
+                old_thresh,
+                new_thresh,
+                remapped=remapped,
+                skipped=remap_skipped,
+            )
+
+        def _bullet(items: list[str]) -> str:
+            return "\n".join(f"• {it}" for it in items) if items else "_(none)_"
+
+        embed = discord.Embed(
+            title="Rank-role migration",
+            description=(
+                "Renamed legacy ladder roles to the new tier names and "
+                f"remapped their role_rewards thresholds. The 6 new tiers "
+                f"(Chud, Chad, Wiredin, Sigma, Ascendant, Aura) still need "
+                f"to be created and bound via `/setup-roles`."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Roles renamed", value=_bullet(renamed), inline=False)
+        embed.add_field(
+            name="Roles skipped",
+            value=_bullet(rename_skipped),
+            inline=False,
+        )
+        embed.add_field(
+            name="Thresholds remapped", value=_bullet(remapped), inline=False
+        )
+        embed.add_field(
+            name="Thresholds skipped",
+            value=_bullet(remap_skipped),
+            inline=False,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _migrate_one_role(
+        self,
+        guild: discord.Guild,
+        old_name: str,
+        new_name: str,
+        *,
+        renamed: list[str],
+        skipped: list[str],
+    ) -> None:
+        """Rename a legacy ladder role to its new tier name.
+
+        Skips silently when the legacy role doesn't exist, when a role
+        with the new name already exists (so we don't create dupes), or
+        when the bot lacks permission to rename it.
+        """
+        old_role = discord.utils.get(guild.roles, name=old_name)
+        if old_role is None:
+            return  # nothing to migrate; not a "skip" worth reporting
+        existing_new = discord.utils.get(guild.roles, name=new_name)
+        if existing_new is not None and existing_new.id != old_role.id:
+            skipped.append(
+                f"`{old_name}` -> `{new_name}` "
+                f"(a role named `{new_name}` already exists)"
+            )
+            return
+        try:
+            await old_role.edit(name=new_name, reason="prog: rank-role migration")
+        except discord.Forbidden:
+            skipped.append(f"`{old_name}` (missing Manage Roles or role above bot)")
+            return
+        except discord.HTTPException as exc:
+            skipped.append(f"`{old_name}` (HTTP error: {exc})")
+            return
+        renamed.append(f"`{old_name}` -> `{new_name}`")
+
+    async def _migrate_one_threshold(
+        self,
+        guild_id: int,
+        old_threshold: int,
+        new_threshold: int,
+        *,
+        remapped: list[str],
+        skipped: list[str],
+    ) -> None:
+        """Update a role_rewards row's ``level`` from old to new.
+
+        Skips when there's nothing at the old level, when the new level
+        is already occupied (an explicit conflict the admin should
+        resolve), or when old == new (Freshie at level 1 stays at 1).
+        """
+        if old_threshold == new_threshold:
+            return  # nothing to do
+        async with get_session_factory()() as session:
+            old_row = await crud.get_role_reward(session, guild_id, old_threshold)
+            if old_row is None:
+                await session.commit()
+                return
+            new_row = await crud.get_role_reward(session, guild_id, new_threshold)
+            if new_row is not None:
+                skipped.append(
+                    f"L{old_threshold} -> L{new_threshold} "
+                    f"(L{new_threshold} already configured; "
+                    f"resolve manually with `/setup-roles`)"
+                )
+                await session.commit()
+                return
+            old_row.level = new_threshold
+            await session.commit()
+        remapped.append(f"L{old_threshold} -> L{new_threshold}")
 
 
 async def setup(bot: commands.Bot) -> None:

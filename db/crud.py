@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.leveling import cumulative_xp_to_level, level_from_xp
+from core.leveling import LEVEL_CAP, cumulative_xp_to_level, level_from_total_xp
 from db.models import GuildConfig, RoleReward, User
 
 
@@ -242,7 +242,7 @@ async def add_text_xp(
     user.xp = user.xp + amount
     user.text_xp_total = user.text_xp_total + amount
     user.last_message_at = now
-    user.level = level_from_xp(user.xp)
+    user.level = level_from_total_xp(user.xp)
     return LevelChange(user=user, old_level=old_level, new_level=user.level)
 
 
@@ -257,7 +257,7 @@ async def add_voice_xp(
     old_level = user.level
     user.xp = user.xp + amount
     user.voice_xp_total = user.voice_xp_total + amount
-    user.level = level_from_xp(user.xp)
+    user.level = level_from_total_xp(user.xp)
     return LevelChange(user=user, old_level=old_level, new_level=user.level)
 
 
@@ -273,7 +273,7 @@ async def add_admin_xp(
     user = await _lock_user(session, guild_id, user_id)
     old_level = user.level
     user.xp = max(0, user.xp + delta)
-    user.level = level_from_xp(user.xp)
+    user.level = level_from_total_xp(user.xp)
     return LevelChange(user=user, old_level=old_level, new_level=user.level)
 
 
@@ -287,7 +287,7 @@ async def set_user_xp(
     user = await _lock_user(session, guild_id, user_id)
     old_level = user.level
     user.xp = max(0, total)
-    user.level = level_from_xp(user.xp)
+    user.level = level_from_total_xp(user.xp)
     return LevelChange(user=user, old_level=old_level, new_level=user.level)
 
 
@@ -297,14 +297,36 @@ async def set_user_level(
     user_id: int,
     target_level: int,
 ) -> LevelChange:
-    """Set the user to the minimum XP for ``target_level``."""
-    if target_level < 1:
-        raise ValueError(f"target_level must be >= 1, got {target_level}")
+    """Set the user to the minimum XP for ``target_level``.
+
+    ``target_level`` is clamped to ``[0, LEVEL_CAP]`` so an admin can't
+    overshoot the curve.
+    """
+    if target_level < 0:
+        raise ValueError(f"target_level must be >= 0, got {target_level}")
+    target_level = min(target_level, LEVEL_CAP)
     user = await _lock_user(session, guild_id, user_id)
     old_level = user.level
     user.xp = cumulative_xp_to_level(target_level)
     user.level = target_level
     return LevelChange(user=user, old_level=old_level, new_level=target_level)
+
+
+async def mark_aura_message_fired(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+) -> None:
+    """Set the one-shot Aura announcement flag for this user.
+
+    Idempotent - flipping an already-true flag is a no-op. Callers must
+    hold the user row lock (e.g. via a prior :func:`_lock_user` in the
+    same transaction) so this stays race-free with concurrent XP grants.
+    """
+    user = await get_user(session, guild_id, user_id)
+    if user is None:
+        return
+    user.aura_message_fired = True
 
 
 async def get_top_users(
