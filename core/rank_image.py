@@ -4,13 +4,17 @@ Sibling of :mod:`core.leaderboard_image` — same fonts, same atmospheric
 background, same dark-aubergine palette — but composed as a single-
 member "trophy card" rather than a ranked list.
 
-Composition
------------
-* Top stripe: server icon + name on the left, "RANK #N of M" in
-  Fraunces serif on the right.
+Composition (ID-card layout)
+----------------------------
+* Top stripe: server icon + name on the left, a small "MEMBER CARD"
+  tag on the right. (The rank position used to live here; it now
+  lives in the stats grid below alongside the other fields.)
 * Hero block: a large circular avatar with a tier-coloured glow ring
   and hairline ring; right of it the display name, the tier label, and
   the huge Fraunces ``LEVEL <n>`` figure as the visual hero.
+* Stats grid: four boxed cells (RANK / JOINED SERVER / JOINED DISCORD
+  / NEXT TIER), each with a rounded rectangle border and a tier-
+  coloured corner accent — the ID-card "field" treatment.
 * Footer block: a progress bar showing progress within the current
   level (filled in tier colour, with a soft inner glow) and a caption
   reading ``"<pct>% to Level <n+1>"`` (or ``"MAX LEVEL"`` at 100).
@@ -100,10 +104,10 @@ AVATAR_SIZE = 248
 PROGRESS_BAR_HEIGHT = 22
 PROGRESS_BAR_RADIUS = 11
 
-# Stats strip — four cells in one horizontal row.
+# Stats grid — four ID-card boxes in one horizontal row.
 STATS_STRIP_Y = 504
-STATS_STRIP_H = 100
-STATS_CELL_GAP = 22
+STATS_STRIP_H = 108
+STATS_CELL_GAP = 18
 
 
 # ---------------------------------------------------------------------------
@@ -251,38 +255,39 @@ class _RankRenderer:
         else:
             text_x = H_PAD
 
-        # Server name — Bricolage SemiBold, uppercased + tracked feel.
+        # Server name — Bricolage SemiBold, uppercased.
         name_font = self._sans(26, weight=700)
         draw.text(
-            (text_x, y + 14),
+            (text_x, y + 18),
             self.data.guild_name.upper(),
             font=name_font,
             fill=TEXT_SECONDARY,
         )
 
-        # Right side: "RANK" small label + huge serif "#N OF M".
-        rank_label_font = self._sans(20, weight=600)
-        rank_value_font = self._serif(54, weight=800)
-        label_text = "RANK"
-        value_text = f"#{self.data.rank} OF {self.data.total_members}"
-
-        value_bbox = rank_value_font.getbbox(value_text)
-        value_w = value_bbox[2] - value_bbox[0]
-        label_w = _text_width(draw, label_text, rank_label_font)
-
-        right_edge = CANVAS_W - H_PAD
-        value_x = right_edge - value_w
-        draw.text(
-            (value_x, y + 6),
-            value_text,
-            font=rank_value_font,
-            fill=self.accent + (255,),
+        # Right side: a small "MEMBER CARD" tag (ID-card flair).
+        tag_font = self._sans(20, weight=700)
+        tag_text = "MEMBER CARD"
+        tag_w = _text_width(draw, tag_text, tag_font)
+        tag_x0 = CANVAS_W - H_PAD - tag_w - 28
+        tag_y0 = y + 16
+        # Tier-accent pill chip.
+        chip_h = 36
+        chip_x1 = CANVAS_W - H_PAD
+        chip_w = tag_w + 28
+        chip_x0 = chip_x1 - chip_w
+        chip_y0 = tag_y0 - 4
+        chip_y1 = chip_y0 + chip_h
+        draw.rounded_rectangle(
+            (chip_x0, chip_y0, chip_x1, chip_y1),
+            radius=chip_h // 2,
+            outline=self.accent + (200,),
+            width=2,
         )
         draw.text(
-            (right_edge - label_w, y + 64),
-            label_text,
-            font=rank_label_font,
-            fill=TEXT_DIM,
+            (chip_x0 + 14, chip_y0 + 6),
+            tag_text,
+            font=tag_font,
+            fill=self.accent + (255,),
         )
 
         # Hairline divider below the stripe.
@@ -396,19 +401,10 @@ class _RankRenderer:
         if not cells:
             return
 
-        draw = ImageDraw.Draw(canvas, "RGBA")
-
-        # Thin keyline above the strip.
-        draw.line(
-            [(H_PAD, STATS_STRIP_Y - 12), (CANVAS_W - H_PAD, STATS_STRIP_Y - 12)],
-            fill=(160, 134, 215, 60),
-            width=1,
-        )
-
         usable_w = CANVAS_W - 2 * H_PAD - (len(cells) - 1) * STATS_CELL_GAP
         cell_w = usable_w // len(cells)
 
-        label_font = self._sans(17, weight=700)
+        label_font = self._sans(16, weight=700)
         value_font = self._sans(28, weight=700)
 
         for i, (label, value) in enumerate(cells):
@@ -419,7 +415,11 @@ class _RankRenderer:
             )
 
     def _build_stat_cells(self) -> list[tuple[str, str]]:
-        """Return the (label, value) pairs to render in the stats strip."""
+        """Return the (label, value) pairs for the ID-card stats grid.
+
+        ACTIVITY was removed at user request; RANK moved here from the
+        top stripe so the bottom row reads like a passport's field grid.
+        """
         d = self.data
 
         def _month_year(dt: Optional[datetime]) -> str:
@@ -427,27 +427,15 @@ class _RankRenderer:
                 return "—"
             return dt.strftime("%b %Y").upper()
 
-        # Activity split: which source produced more XP. Falls back to
-        # "—" when the user genuinely has zero XP from both sources
-        # (which shouldn't happen on /rank because we early-return for
-        # users with no row, but defensive).
-        total = d.text_xp_total + d.voice_xp_total
-        if total <= 0:
-            activity = "—"
-        else:
-            text_pct = round(d.text_xp_total / total * 100)
-            if text_pct >= 50:
-                activity = f"{text_pct}% TEXT"
-            else:
-                activity = f"{100 - text_pct}% VOICE"
-
         next_tier = get_next_tier_for_level(d.level)
         next_tier_label = next_tier.upper() if next_tier else "MAX TIER"
 
+        rank_value = f"#{d.rank} / {d.total_members}"
+
         return [
+            ("RANK", rank_value),
             ("JOINED SERVER", _month_year(d.joined_at)),
             ("JOINED DISCORD", _month_year(d.account_created_at)),
-            ("ACTIVITY", activity),
             ("NEXT TIER", next_tier_label),
         ]
 
@@ -463,20 +451,56 @@ class _RankRenderer:
         label_font: ImageFont.FreeTypeFont,
         value_font: ImageFont.FreeTypeFont,
     ) -> None:
-        draw = ImageDraw.Draw(canvas, "RGBA")
-        # Vertical strut on the left in the tier accent.
-        strut_y0 = y + 4
-        strut_y1 = y + 60
-        draw.line(
-            [(x, strut_y0), (x, strut_y1)],
-            fill=self.accent + (255,),
-            width=3,
+        """Render one ID-card field: rounded-rectangle box with a soft
+        fill, a hairline tier-accent border, a tier-accent corner notch,
+        the uppercase dim label, and the bright primary value.
+
+        The fill is drawn on a separate RGBA layer and alpha-composited
+        — drawing it directly on the canvas would overwrite pixels
+        instead of blending, which renders the box opaque-white.
+        """
+        # Soft tinted fill on its own layer so alpha actually blends.
+        fill_layer = Image.new("RGBA", (width, STATS_STRIP_H), (0, 0, 0, 0))
+        ImageDraw.Draw(fill_layer).rounded_rectangle(
+            (0, 0, width - 1, STATS_STRIP_H - 1),
+            radius=14,
+            fill=(255, 255, 255, 18),
         )
-        # Label.
-        draw.text((x + 14, y + 2), label, font=label_font, fill=TEXT_DIM)
-        # Value (truncated to cell width).
-        value = _truncate(value, value_font, width - 16)
-        draw.text((x + 14, y + 32), value, font=value_font, fill=TEXT_PRIMARY)
+        canvas.alpha_composite(fill_layer, (x, y))
+
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        x1 = x + width
+        y1 = y + STATS_STRIP_H
+
+        # Hairline border in the tier accent.
+        draw.rounded_rectangle(
+            (x, y, x1 - 1, y1 - 1),
+            radius=14,
+            outline=self.accent + (200,),
+            width=2,
+        )
+        # Tier-accent corner notch (top-left): a tiny square that reads
+        # as the "photo-ID corner" tell.
+        notch = 8
+        draw.rectangle(
+            (x + 16, y + 16, x + 16 + notch, y + 16 + notch),
+            fill=self.accent + (255,),
+        )
+        # Label sits to the right of the notch, baseline-aligned with it.
+        draw.text(
+            (x + 16 + notch + 8, y + 12),
+            label,
+            font=label_font,
+            fill=TEXT_DIM,
+        )
+        # Value sits in the lower half of the box.
+        value = _truncate(value, value_font, width - 36)
+        draw.text(
+            (x + 18, y + 56),
+            value,
+            font=value_font,
+            fill=TEXT_PRIMARY,
+        )
 
     def _draw_progress(self, canvas: Image.Image) -> None:
         draw = ImageDraw.Draw(canvas, "RGBA")
