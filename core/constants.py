@@ -35,7 +35,14 @@ VOICE_XP_TICK_SECONDS: int = 60
 # --- Leaderboard channel embed (change-driven, no schedule) ----------------
 
 LEADERBOARD_TOP_N: int = 5
-"""How many users are shown in ``/leaderboard`` and the persistent channel embed."""
+"""How many users are shown in ``/leaderboard`` (the sliding-window
+embed centred on the invoker)."""
+
+LEADERBOARD_IMAGE_TOP_N: int = 10
+"""How many users render onto the persistent channel image."""
+
+LEADERBOARD_AVATAR_CACHE_MAX: int = 256
+"""LRU bound for the in-memory avatar cache used by the image renderer."""
 
 LEADERBOARD_DEBOUNCE_SECONDS: float = 3.0
 """After an XP grant invalidates a guild's cached top-N, wait this long
