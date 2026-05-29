@@ -4,17 +4,17 @@ Sibling of :mod:`core.leaderboard_image` — same fonts, same atmospheric
 background, same dark-aubergine palette — but composed as a single-
 member "trophy card" rather than a ranked list.
 
-Composition (ID-card layout)
-----------------------------
+Composition
+-----------
 * Top stripe: server icon + name on the left, a small "MEMBER CARD"
-  tag on the right. (The rank position used to live here; it now
-  lives in the stats grid below alongside the other fields.)
-* Hero block: a large circular avatar with a tier-coloured glow ring
-  and hairline ring; right of it the display name, the tier label, and
-  the huge Fraunces ``LEVEL <n>`` figure as the visual hero.
-* Stats grid: four boxed cells (RANK / JOINED SERVER / JOINED DISCORD
-  / NEXT TIER), each with a rounded rectangle border and a tier-
-  coloured corner accent — the ID-card "field" treatment.
+  tag on the right.
+* Hero block: avatar on the left with a tier-coloured glow ring and
+  hairline ring; immediately right of it a centre column with the
+  display name, the tier label, and the huge Fraunces ``LEVEL <n>``
+  figure; and a right column with the stats stacked vertically (RANK,
+  JOINED SERVER, JOINED DISCORD, NEXT TIER). Each stat is a small
+  tier-accent dot + uppercase label + primary value — no borders or
+  boxes, just rhythmic stacking.
 * Footer block: a progress bar showing progress within the current
   level (filled in tier colour, with a soft inner glow) and a caption
   reading ``"<pct>% to Level <n+1>"`` (or ``"MAX LEVEL"`` at 100).
@@ -93,7 +93,7 @@ def _accent_for(level: int) -> tuple[int, int, int]:
 # ---------------------------------------------------------------------------
 
 CANVAS_W = 1200
-CANVAS_H = 780
+CANVAS_H = 620
 H_PAD = 56
 
 SERVER_ICON_SIZE = 64
@@ -104,10 +104,15 @@ AVATAR_SIZE = 248
 PROGRESS_BAR_HEIGHT = 22
 PROGRESS_BAR_RADIUS = 11
 
-# Stats grid — four ID-card boxes in one horizontal row.
-STATS_STRIP_Y = 504
-STATS_STRIP_H = 108
-STATS_CELL_GAP = 18
+# Hero columns. Avatar starts at H_PAD; identity column is centre;
+# stats column is right. Tuned so the level number doesn't crowd the
+# stats and the stats don't get too narrow for "NEXT TIER: ASCENDANT".
+HERO_TOP_Y = 160
+IDENTITY_COL_X = H_PAD + AVATAR_SIZE + 48        # 352 with current values
+IDENTITY_COL_RIGHT = 700
+STATS_COL_X = 732
+STATS_COL_TOP_Y = 188
+STATS_ROW_H = 70
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +194,8 @@ class _RankRenderer:
         )
 
         self._draw_top_stripe(canvas)
+        # _draw_hero internally calls _draw_stats_column for the right side.
         self._draw_hero(canvas)
-        self._draw_stats_strip(canvas)
         self._draw_progress(canvas)
 
         buf = io.BytesIO()
@@ -304,7 +309,7 @@ class _RankRenderer:
         draw = ImageDraw.Draw(canvas, "RGBA")
         # Avatar position.
         ax = H_PAD
-        ay = 160
+        ay = HERO_TOP_Y
 
         # Soft glow halo behind avatar in accent colour.
         glow = Image.new(
@@ -335,10 +340,10 @@ class _RankRenderer:
         )
         canvas.alpha_composite(ring, (ax - 4, ay - 4))
 
-        # Right-side identity block.
-        rx = ax + AVATAR_SIZE + 56
-        # Display name — Bricolage Black, sized to fit.
-        name_max_w = CANVAS_W - rx - H_PAD - 24
+        # Centre identity column — bounded by IDENTITY_COL_RIGHT so it
+        # doesn't crowd the stats column on the right.
+        rx = IDENTITY_COL_X
+        name_max_w = IDENTITY_COL_RIGHT - rx
         name_font, name_text = self._fit_text(
             self.data.display_name, name_max_w, (40, 72), weight=800
         )
@@ -389,36 +394,61 @@ class _RankRenderer:
             fill=self.accent + (255,),
         )
 
-    # ---------- progress ----------
+        # Right column — vertically stacked stats.
+        self._draw_stats_column(canvas)
 
-    # ---------- stats strip ----------
+    # ---------- stats column ----------
 
-    def _draw_stats_strip(self, canvas: Image.Image) -> None:
-        """Four-cell stat row: joined server, joined Discord, activity
-        mix, next tier preview. Each cell has a tiny accent strut on
-        the left, an uppercase dim label, and a bright primary value."""
+    def _draw_stats_column(self, canvas: Image.Image) -> None:
+        """Stack stats vertically in the empty right column of the hero.
+
+        Plain layout — no borders, no fills, no boxed cells. Each row:
+        a small tier-accent square anchor on the left, an uppercase
+        dim label, and a primary value beneath. The rhythm of equal
+        STATS_ROW_H spacing carries the design.
+        """
         cells = self._build_stat_cells()
         if not cells:
             return
 
-        usable_w = CANVAS_W - 2 * H_PAD - (len(cells) - 1) * STATS_CELL_GAP
-        cell_w = usable_w // len(cells)
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        label_font = self._sans(17, weight=700)
+        value_font = self._sans(30, weight=700)
 
-        label_font = self._sans(16, weight=700)
-        value_font = self._sans(28, weight=700)
+        col_x = STATS_COL_X
+        col_right = CANVAS_W - H_PAD
+        value_max_w = col_right - col_x - 24
 
         for i, (label, value) in enumerate(cells):
-            cx = H_PAD + i * (cell_w + STATS_CELL_GAP)
-            self._draw_one_stat_cell(
-                canvas, cx, STATS_STRIP_Y, cell_w, label, value,
-                label_font=label_font, value_font=value_font,
+            row_y = STATS_COL_TOP_Y + i * STATS_ROW_H
+            # Tiny solid square in the tier accent — anchors the row
+            # without surrounding it with a border.
+            dot_size = 7
+            draw.rectangle(
+                (col_x, row_y + 6, col_x + dot_size, row_y + 6 + dot_size),
+                fill=self.accent + (255,),
+            )
+            # Label sits to the right of the square.
+            draw.text(
+                (col_x + dot_size + 10, row_y),
+                label,
+                font=label_font,
+                fill=TEXT_DIM,
+            )
+            # Value beneath, aligned to the column's left edge.
+            value = _truncate(value, value_font, value_max_w)
+            draw.text(
+                (col_x, row_y + 26),
+                value,
+                font=value_font,
+                fill=TEXT_PRIMARY,
             )
 
     def _build_stat_cells(self) -> list[tuple[str, str]]:
-        """Return the (label, value) pairs for the ID-card stats grid.
+        """Return the (label, value) pairs for the stats column.
 
-        ACTIVITY was removed at user request; RANK moved here from the
-        top stripe so the bottom row reads like a passport's field grid.
+        Order top -> bottom: RANK, JOINED SERVER, JOINED DISCORD,
+        NEXT TIER. ACTIVITY removed at user request.
         """
         d = self.data
 
@@ -430,77 +460,14 @@ class _RankRenderer:
         next_tier = get_next_tier_for_level(d.level)
         next_tier_label = next_tier.upper() if next_tier else "MAX TIER"
 
-        rank_value = f"#{d.rank} / {d.total_members}"
-
         return [
-            ("RANK", rank_value),
+            ("RANK", f"#{d.rank} / {d.total_members}"),
             ("JOINED SERVER", _month_year(d.joined_at)),
             ("JOINED DISCORD", _month_year(d.account_created_at)),
             ("NEXT TIER", next_tier_label),
         ]
 
-    def _draw_one_stat_cell(
-        self,
-        canvas: Image.Image,
-        x: int,
-        y: int,
-        width: int,
-        label: str,
-        value: str,
-        *,
-        label_font: ImageFont.FreeTypeFont,
-        value_font: ImageFont.FreeTypeFont,
-    ) -> None:
-        """Render one ID-card field: rounded-rectangle box with a soft
-        fill, a hairline tier-accent border, a tier-accent corner notch,
-        the uppercase dim label, and the bright primary value.
-
-        The fill is drawn on a separate RGBA layer and alpha-composited
-        — drawing it directly on the canvas would overwrite pixels
-        instead of blending, which renders the box opaque-white.
-        """
-        # Soft tinted fill on its own layer so alpha actually blends.
-        fill_layer = Image.new("RGBA", (width, STATS_STRIP_H), (0, 0, 0, 0))
-        ImageDraw.Draw(fill_layer).rounded_rectangle(
-            (0, 0, width - 1, STATS_STRIP_H - 1),
-            radius=14,
-            fill=(255, 255, 255, 18),
-        )
-        canvas.alpha_composite(fill_layer, (x, y))
-
-        draw = ImageDraw.Draw(canvas, "RGBA")
-        x1 = x + width
-        y1 = y + STATS_STRIP_H
-
-        # Hairline border in the tier accent.
-        draw.rounded_rectangle(
-            (x, y, x1 - 1, y1 - 1),
-            radius=14,
-            outline=self.accent + (200,),
-            width=2,
-        )
-        # Tier-accent corner notch (top-left): a tiny square that reads
-        # as the "photo-ID corner" tell.
-        notch = 8
-        draw.rectangle(
-            (x + 16, y + 16, x + 16 + notch, y + 16 + notch),
-            fill=self.accent + (255,),
-        )
-        # Label sits to the right of the notch, baseline-aligned with it.
-        draw.text(
-            (x + 16 + notch + 8, y + 12),
-            label,
-            font=label_font,
-            fill=TEXT_DIM,
-        )
-        # Value sits in the lower half of the box.
-        value = _truncate(value, value_font, width - 36)
-        draw.text(
-            (x + 18, y + 56),
-            value,
-            font=value_font,
-            fill=TEXT_PRIMARY,
-        )
+    # ---------- progress ----------
 
     def _draw_progress(self, canvas: Image.Image) -> None:
         draw = ImageDraw.Draw(canvas, "RGBA")
