@@ -49,7 +49,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # ---------------------------------------------------------------------------
 # Assets
@@ -271,18 +271,20 @@ class _Renderer:
     # ---------- background ----------
 
     def _make_background(self, w: int, h: int) -> Image.Image:
-        """Vertical gradient only — no grain, no vignette."""
-        base = Image.new("RGBA", (w, h), BG_TOP + (255,))
-        draw = ImageDraw.Draw(base)
-        for y in range(h):
-            t = y / max(1, h - 1)
-            # Smoothstep so the midband sits a touch darker than linear.
-            t2 = t * t * (3 - 2 * t)
-            r = int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * t2)
-            g = int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * t2)
-            b = int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * t2)
-            draw.line([(0, y), (w, y)], fill=(r, g, b, 255))
-        return base
+        """Vertical gradient + atmospheric glowing orbs."""
+        canvas = make_atmospheric_background(
+            w,
+            h,
+            orbs=[
+                # Top-left magenta haze.
+                (int(w * 0.05), int(h * 0.08), int(w * 0.42), (244, 114, 182), 68, 140),
+                # Mid-right violet glow.
+                (int(w * 0.95), int(h * 0.45), int(w * 0.50), (149, 84, 220), 52, 160),
+                # Bottom-centre warm gold pool.
+                (int(w * 0.55), int(h * 1.02), int(w * 0.60), (255, 178, 102), 40, 180),
+            ],
+        )
+        return canvas
 
     # ---------- header ----------
 
@@ -503,6 +505,44 @@ class _Renderer:
 # ---------------------------------------------------------------------------
 # Drawing helpers (module-private; pure functions over Image)
 # ---------------------------------------------------------------------------
+
+
+def make_atmospheric_background(
+    w: int,
+    h: int,
+    *,
+    orbs: list[tuple[int, int, int, tuple, int, int]],
+) -> Image.Image:
+    """Build a deep-aubergine gradient canvas with floating glowing orbs.
+
+    Each orb is ``(cx, cy, radius, rgb, alpha, blur)``; the orb is drawn
+    on its own layer at the given alpha, gaussian-blurred, then
+    alpha-composited over the gradient base. This is what gives the
+    leaderboard and rank cards their "nebula behind glass" depth without
+    needing actual mesh-gradient math.
+    """
+    # Vertical smoothstep gradient — same as the v1 background.
+    base = Image.new("RGBA", (w, h), BG_TOP + (255,))
+    draw = ImageDraw.Draw(base)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        t2 = t * t * (3 - 2 * t)
+        r = int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * t2)
+        g = int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * t2)
+        b = int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * t2)
+        draw.line([(0, y), (w, y)], fill=(r, g, b, 255))
+
+    for cx, cy, radius, rgb, alpha, blur in orbs:
+        layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(layer).ellipse(
+            (cx - radius, cy - radius, cx + radius, cy + radius),
+            fill=rgb[:3] + (alpha,),
+        )
+        if blur > 0:
+            layer = layer.filter(ImageFilter.GaussianBlur(blur))
+        base = Image.alpha_composite(base, layer)
+
+    return base
 
 
 def _circular_image(image_bytes: bytes, size: int) -> Image.Image:
