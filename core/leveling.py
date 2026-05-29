@@ -51,10 +51,9 @@ TIER_BANDS: list[tuple[int, int, str, str]] = [
     (30, 39, "Hustler", "Hustler"),
     (40, 49, "Yapper", "Yapper"),
     (50, 59, "Chud", "Chud"),
-    (60, 69, "Chad", "Chad"),
-    (70, 79, "Wiredin", "Wiredin"),
-    (80, 89, "Sigma", "Sigma"),
-    (90, 99, "Ascendant", "Ascendant"),
+    (60, 69, "Yappatron", "Yappatron"),
+    (70, 79, "Challenger", "Challenger"),
+    (80, 99, "Ascendant", "Ascendant"),
     (100, 100, "Aura", "Aura"),
 ]
 
@@ -75,16 +74,10 @@ LEVEL_MESSAGES: dict[str, str] = {
     "Innovator": "{user} reached level {level}! cooking up something different",
     "Hustler": "{user} hit level {level}! grindset activated, no days off",
     "Yapper": "{user} just yapped their way to level {level}! the rizz is undeniable",
-    "Chud": "{user} ascended to level {level}! they're built different fr",
-    "Chad": "{user} reached level {level}! certified gigachad behavior",
-    "Wiredin": "{user} hit level {level}! el wiro you gonna get caught up or something",
-    "Sigma": (
-        "{user} hit level {level}! what an alpha, you're close to "
-        "reaching your max potential"
-    ),
-    "Ascendant": (
-        "{user} ascended to level {level}! aura points off the charts, mewing 24/7"
-    ),
+    "Chud": "{user} ascended to level {level}! certified yappatron",
+    "Yappatron": "{user} reached level {level}! challenger arc activated",
+    "Challenger": "{user} hit level {level}! you ascending now, get your lvls up",
+    "Ascendant": "{user} ascended to level {level}! Aura is coming up soon",
     "Aura": (
         "HOLY BALLS. {user} JUST HIT LEVEL 100. 10,000+ messages. "
         "countless hours in vc. the absolute peak of progsu. good sh*t"
