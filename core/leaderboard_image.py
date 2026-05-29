@@ -9,14 +9,19 @@ Design language — "editorial scoreboard"
 Two type families, carefully partitioned:
 
 * **Fraunces** (variable, OFL) — a high-contrast display serif with
-  optical-size + weight + softness + wonk axes. Used for the
-  ``LEADERBOARD`` masthead, the top-3 rank numerals, and the top-3
-  user names. This is the "podium / trophy" feel — premium, editorial,
-  high-impact.
+  optical-size + weight + softness + wonk axes. Used *only* for the
+  ``LEADERBOARD`` masthead and the top-3 ordinal labels (``1st`` /
+  ``2nd`` / ``3rd``). This is the "trophy" voice — premium and
+  editorial, but reserved.
 * **Bricolage Grotesque** (variable, OFL) — clean modern sans-serif.
-  Used for the subtitle, the rest of the field (ranks 4-10), and
-  every "Level X" tag. This is the "roster" feel — functional and
-  legible at smaller sizes.
+  Used for every user-facing string: the server name, all user
+  display names (top-3 and field alike), every ``Level X`` tag, and
+  the ordinals on rows 4-10. Sans is more legible for names; that
+  reverts a misstep from v4.
+
+Podium hierarchy is physical, not just typographic — the top-3 rows
+have *different* heights (1st > 2nd > 3rd) so the medal positions
+feel like an actual podium when you scan the card.
 
 Other rules:
 
@@ -89,30 +94,49 @@ BRONZE = (232, 148, 93, 255)
 CANVAS_W = 1200
 H_PAD = 56            # left/right outer padding
 HEADER_H = 240
-PODIUM_ROW_H = 220
 STANDARD_ROW_H = 118
 BOTTOM_PAD = 24       # space below the last row (replaces the footer)
 CARD_RADIUS = 24
 STRIPE_WIDTH = 6
 STRIPE_INSET = 18     # how far in from the card's left edge the stripe sits
 
-# Avatar sizes per rank tier
-AVATAR_TOP1 = 144
-AVATAR_TOP23 = 122
-AVATAR_STD = 72
+# Per-rank podium dimensions. The hierarchy is physical: 1st > 2nd > 3rd
+# in row height, ordinal-label size, avatar size, name-bounds, and Level
+# size. Numbers were tuned so a 14-char name on each row reads as
+# roughly the same "presence" — bigger on 1st, smaller on 3rd.
+_PODIUM_DIMS: dict[int, dict] = {
+    1: {
+        "row_h": 244,
+        "ordinal_size": 132,
+        "avatar": 156,
+        "name_fit": (52, 96),
+        "level_size": 52,
+    },
+    2: {
+        "row_h": 218,
+        "ordinal_size": 106,
+        "avatar": 130,
+        "name_fit": (44, 80),
+        "level_size": 42,
+    },
+    3: {
+        "row_h": 196,
+        "ordinal_size": 88,
+        "avatar": 108,
+        "name_fit": (38, 66),
+        "level_size": 36,
+    },
+}
+
+# Avatar size for ranks 4-10.
+AVATAR_STD = 74
 
 # Server icon at top-left.
 SERVER_ICON_SIZE = 116
 SERVER_ICON_RADIUS = 22
 
-# Adaptive name-fit bounds. The renderer picks the largest weight-700
-# size in [min, max] that lets the full name fit in the available width;
-# only if even the min won't fit does it ellipsize.
-# Top-3 uses Fraunces (serif), the rest uses Bricolage (sans). Fraunces
-# typically renders ~5-10% wider at the same point size, so its bounds
-# are slightly tighter to preserve roughly the same visual heft.
-NAME_FIT_TOP1 = (46, 92)
-NAME_FIT_TOP23 = (42, 80)
+# Adaptive name-fit bounds for standard rows (4-10). Same family as the
+# podium names (Bricolage) so visual rhythm carries through.
 NAME_FIT_STD = (32, 62)
 
 
@@ -173,9 +197,10 @@ class _Renderer:
 
         self.top3 = entries[:3]
         self.rest = entries[3:]
+        podium_h = sum(_PODIUM_DIMS[e.rank]["row_h"] for e in self.top3)
         self.height = (
             HEADER_H
-            + len(self.top3) * PODIUM_ROW_H
+            + podium_h
             + len(self.rest) * STANDARD_ROW_H
             + BOTTOM_PAD
         )
@@ -347,24 +372,24 @@ class _Renderer:
     def _draw_podium_row(
         self, canvas: Image.Image, entry: LeaderboardEntry, y: int
     ) -> int:
-        is_first = entry.rank == 1
+        dims = _PODIUM_DIMS[entry.rank]
+        row_h = dims["row_h"]
         medal_color = {1: GOLD, 2: SILVER, 3: BRONZE}[entry.rank]
-        avatar_size = AVATAR_TOP1 if is_first else AVATAR_TOP23
-        row_h = PODIUM_ROW_H
+        avatar_size = dims["avatar"]
 
         _draw_row_card(canvas, y, row_h, fill=SURFACE_TOP3, keyline=KEYLINE)
         _draw_left_stripe(canvas, y, row_h, color=medal_color)
 
         draw = ImageDraw.Draw(canvas, "RGBA")
 
-        # Rank numeral — Fraunces, giant, medal-coloured.
-        rank_font = self._serif(118 if is_first else 100, weight=800)
-        rank_text = f"{entry.rank:02d}"
-        rb = rank_font.getbbox(rank_text)
+        # Ordinal label — Fraunces, medal-coloured, podium-scaled.
+        ordinal_text = _ordinal(entry.rank)
+        rank_font = self._serif(dims["ordinal_size"], weight=800)
+        rb = rank_font.getbbox(ordinal_text)
         rh = rb[3] - rb[1]
         rank_x = H_PAD + STRIPE_INSET + STRIPE_WIDTH + 22
         rank_y = y + (row_h - rh) // 2 - rb[1]
-        draw.text((rank_x, rank_y), rank_text, font=rank_font, fill=medal_color)
+        draw.text((rank_x, rank_y), ordinal_text, font=rank_font, fill=medal_color)
 
         # Avatar.
         rank_w = rb[2] - rb[0]
@@ -385,8 +410,8 @@ class _Renderer:
         )
         canvas.alpha_composite(ring, (ax - ring_inset, ay - ring_inset))
 
-        # Right-anchored Level tag — Bricolage, bigger than v3.
-        level_font = self._sans(46 if is_first else 42, weight=700)
+        # Right-anchored Level tag — Bricolage, medal-coloured.
+        level_font = self._sans(dims["level_size"], weight=700)
         level_text = f"Level {entry.level}"
         level_w = _text_width(draw, level_text, level_font)
         level_x = CANVAS_W - H_PAD - 32 - level_w
@@ -395,12 +420,11 @@ class _Renderer:
         level_y = y + (row_h - lh) // 2 - lb[1]
         draw.text((level_x, level_y), level_text, font=level_font, fill=medal_color)
 
-        # Name — Fraunces, adaptive sizing to fill remaining space.
+        # Name — Bricolage sans-serif (matches the rest of the field).
         text_x = ax + avatar_size + 36
         name_max = level_x - text_x - 40
-        size_bounds = NAME_FIT_TOP1 if is_first else NAME_FIT_TOP23
         name_font, name = self._fit_name(
-            entry.display_name, name_max, size_bounds, family="serif", weight=700
+            entry.display_name, name_max, dims["name_fit"], family="sans", weight=700
         )
         nb = name_font.getbbox(name)
         nh = nb[3] - nb[1]
@@ -420,8 +444,8 @@ class _Renderer:
         draw = ImageDraw.Draw(canvas, "RGBA")
 
         # Rank (Bricolage; serif is reserved for the podium).
-        rank_font = self._sans(62, weight=700)
-        rank_text = f"{entry.rank:02d}"
+        rank_font = self._sans(56, weight=700)
+        rank_text = _ordinal(entry.rank)
         rb = rank_font.getbbox(rank_text)
         rh = rb[3] - rb[1]
         rank_x = H_PAD + 26
@@ -587,6 +611,17 @@ def _text_width(
     """Return the rendered pixel width of ``text``."""
     bbox = draw.textbbox((0, 0), text, font=font)
     return bbox[2] - bbox[0]
+
+
+def _ordinal(n: int) -> str:
+    """Return ``n`` as an English ordinal string: 1 -> 1st, 2 -> 2nd,
+    3 -> 3rd, 4 -> 4th, ..., 11 -> 11th, 21 -> 21st, etc.
+    """
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 def _truncate(
