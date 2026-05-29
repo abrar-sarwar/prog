@@ -1,25 +1,35 @@
 """PNG renderer for the persistent leaderboard embed.
 
-Produces a single sharp PNG card depicting the top-N users for a guild.
+Produces a single sharp PNG card depicting the top-10 users for a guild.
 The card is rendered at 1200px wide (2x logical) so it stays crisp on
 Discord's retina displays.
 
 Design language — "editorial scoreboard"
 ----------------------------------------
-* One sans-serif family (Bricolage Grotesque variable) for *everything*.
-  Hierarchy comes from weight + size contrast.
+Two type families, carefully partitioned:
+
+* **Fraunces** (variable, OFL) — a high-contrast display serif with
+  optical-size + weight + softness + wonk axes. Used for the
+  ``LEADERBOARD`` masthead, the top-3 rank numerals, and the top-3
+  user names. This is the "podium / trophy" feel — premium, editorial,
+  high-impact.
+* **Bricolage Grotesque** (variable, OFL) — clean modern sans-serif.
+  Used for the subtitle, the rest of the field (ranks 4-10), and
+  every "Level X" tag. This is the "roster" feel — functional and
+  legible at smaller sizes.
+
+Other rules:
+
 * Deep aubergine vertical gradient. No grain, no vignette — flat
   surface so text contrast is maximal.
 * Server icon at the top-left in a rounded square (coat-of-arms inset).
-* Title "LEADERBOARD" in heavy weight, server name immediately below.
 * Top-3 podium emphasis is structural: each top-3 row has a 6px
   medal-coloured stripe on its left edge plus a hairline medal ring
   on the avatar.
 * Names are the heroes — they auto-size *per row* to fill the
-  available width, capped only by what the row can hold vertically.
-  Short names render giant; long names downsize and finally truncate.
-* The only number besides the rank is the user's Level. XP is
-  intentionally omitted to keep visual density low.
+  available width. Short names render giant; long names downsize and
+  finally truncate.
+* The only number besides the rank is the user's Level. XP is omitted.
 * No footer, no timestamp. The card is just the leaderboard.
 
 The renderer is pure synchronous Pillow code — call ``render_png`` from
@@ -41,7 +51,8 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
-_FONT_PATH = _ASSETS_DIR / "BricolageGrotesque-VariableFont.ttf"
+_FONT_SANS_PATH = _ASSETS_DIR / "BricolageGrotesque-VariableFont.ttf"
+_FONT_SERIF_PATH = _ASSETS_DIR / "Fraunces-VariableFont.ttf"
 
 
 # ---------------------------------------------------------------------------
@@ -77,29 +88,32 @@ BRONZE = (232, 148, 93, 255)
 
 CANVAS_W = 1200
 H_PAD = 56            # left/right outer padding
-HEADER_H = 200
-PODIUM_ROW_H = 210
-STANDARD_ROW_H = 112
+HEADER_H = 240
+PODIUM_ROW_H = 220
+STANDARD_ROW_H = 118
 BOTTOM_PAD = 24       # space below the last row (replaces the footer)
 CARD_RADIUS = 24
 STRIPE_WIDTH = 6
 STRIPE_INSET = 18     # how far in from the card's left edge the stripe sits
 
 # Avatar sizes per rank tier
-AVATAR_TOP1 = 140
-AVATAR_TOP23 = 118
-AVATAR_STD = 68
+AVATAR_TOP1 = 144
+AVATAR_TOP23 = 122
+AVATAR_STD = 72
 
 # Server icon at top-left.
-SERVER_ICON_SIZE = 108
+SERVER_ICON_SIZE = 116
 SERVER_ICON_RADIUS = 22
 
-# Adaptive name-fit bounds. The renderer picks the largest weight=700
+# Adaptive name-fit bounds. The renderer picks the largest weight-700
 # size in [min, max] that lets the full name fit in the available width;
 # only if even the min won't fit does it ellipsize.
-NAME_FIT_TOP1 = (44, 88)
-NAME_FIT_TOP23 = (40, 76)
-NAME_FIT_STD = (30, 58)
+# Top-3 uses Fraunces (serif), the rest uses Bricolage (sans). Fraunces
+# typically renders ~5-10% wider at the same point size, so its bounds
+# are slightly tighter to preserve roughly the same visual heft.
+NAME_FIT_TOP1 = (46, 92)
+NAME_FIT_TOP23 = (42, 80)
+NAME_FIT_STD = (32, 62)
 
 
 # ---------------------------------------------------------------------------
@@ -185,24 +199,41 @@ class _Renderer:
 
     # ---------- fonts ----------
 
-    def _font(self, size: int, weight: int = 600) -> ImageFont.FreeTypeFont:
+    def _sans(self, size: int, weight: int = 600) -> ImageFont.FreeTypeFont:
         """Return a cached Bricolage Grotesque face at the given size/weight.
 
-        Bricolage is a variable font (axes: wght 200-800, wdth 75-100,
-        opsz 12-96). We set the weight axis explicitly so semibold and
-        heavy render as intended.
+        Bricolage axes (fvar order): wght 200-800, wdth 75-100, opsz 12-96.
         """
-        key = f"{size}:{weight}"
+        key = f"sans:{size}:{weight}"
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
-        font = ImageFont.truetype(str(_FONT_PATH), size=size)
+        font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
         try:
-            # Axis order matches the font's fvar table: wght, wdth, opsz.
             font.set_variation_by_axes([weight, 100, min(max(size, 12), 96)])
         except Exception:
-            # Fall back silently if Pillow is missing variable-font support;
-            # the default instance will still render legibly.
+            pass
+        self._fonts[key] = font
+        return font
+
+    def _serif(self, size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
+        """Return a cached Fraunces face at the given size/weight.
+
+        Fraunces axes (fvar order): opsz 9-144, wght 100-900, SOFT 0-100,
+        WONK 0-1. We pin opsz to the rendered size for proper optical
+        sizing, run SOFT=0 (sharp serifs), and WONK=0 (clean letterforms
+        — no whimsical alternates).
+        """
+        key = f"serif:{size}:{weight}"
+        cached = self._fonts.get(key)
+        if cached is not None:
+            return cached
+        font = ImageFont.truetype(str(_FONT_SERIF_PATH), size=size)
+        try:
+            font.set_variation_by_axes(
+                [min(max(size, 9), 144), weight, 0, 0]
+            )
+        except Exception:
             pass
         self._fonts[key] = font
         return font
@@ -236,7 +267,11 @@ class _Renderer:
                 self.guild_icon_bytes, SERVER_ICON_SIZE, SERVER_ICON_RADIUS
             )
         else:
-            icon = _icon_placeholder(SERVER_ICON_SIZE, SERVER_ICON_RADIUS, self._font(64, 800))
+            icon = _icon_placeholder(
+                SERVER_ICON_SIZE,
+                SERVER_ICON_RADIUS,
+                self._sans(72, weight=800),
+            )
         canvas.alpha_composite(icon, (x, y_top))
         # Subtle inset border around the icon.
         border = Image.new("RGBA", (SERVER_ICON_SIZE, SERVER_ICON_SIZE), (0, 0, 0, 0))
@@ -248,25 +283,28 @@ class _Renderer:
         )
         canvas.alpha_composite(border, (x, y_top))
 
-        # Title block.
-        title_x = x + SERVER_ICON_SIZE + 32
-        title_font = self._font(64, weight=800)
+        # Title block — Fraunces, magazine-masthead scale.
+        title_x = x + SERVER_ICON_SIZE + 34
+        title_font = self._serif(96, weight=800)
+        # Optical-baseline nudge: Fraunces sits a bit higher in the bbox
+        # than Bricolage, so we hand-tune the y offset rather than rely
+        # on the bbox top alone.
         draw.text(
-            (title_x, y_top - 6),
+            (title_x, y_top - 14),
             "LEADERBOARD",
             font=title_font,
             fill=TEXT_PRIMARY,
         )
 
-        # Server name (clipped if very long).
-        subtitle_font = self._font(28, weight=600)
+        # Server name (clipped if very long). Bricolage SemiBold.
+        subtitle_font = self._sans(32, weight=600)
         subtitle = _truncate(
             self.guild_name,
             subtitle_font,
-            CANVAS_W - title_x - H_PAD - 280,
+            CANVAS_W - title_x - H_PAD - 40,
         )
         draw.text(
-            (title_x, y_top + 78),
+            (title_x, y_top + 116),
             subtitle,
             font=subtitle_font,
             fill=TEXT_SECONDARY,
@@ -285,20 +323,23 @@ class _Renderer:
         name: str,
         max_width: int,
         size_bounds: tuple[int, int],
+        *,
+        family: str = "sans",
         weight: int = 700,
     ) -> tuple[ImageFont.FreeTypeFont, str]:
         """Pick the largest weight-``weight`` size in ``size_bounds`` that
-        lets ``name`` fit in ``max_width``. If even the minimum size
+        lets ``name`` fit in ``max_width``. ``family`` is "sans"
+        (Bricolage) or "serif" (Fraunces). If even the minimum size
         overflows, returns the min-size font and an ellipsized name.
         """
+        loader = self._serif if family == "serif" else self._sans
         min_size, max_size = size_bounds
-        # Walk down in 2pt steps for a smooth landing on tight bounds.
         for size in range(max_size, min_size - 1, -2):
-            font = self._font(size, weight=weight)
+            font = loader(size, weight=weight)
             bbox = font.getbbox(name)
             if bbox[2] - bbox[0] <= max_width:
                 return font, name
-        font = self._font(min_size, weight=weight)
+        font = loader(min_size, weight=weight)
         return font, _truncate(name, font, max_width)
 
     # ---------- podium rows (ranks 1..3) ----------
@@ -316,8 +357,8 @@ class _Renderer:
 
         draw = ImageDraw.Draw(canvas, "RGBA")
 
-        # Rank numeral — giant medal-coloured numbers.
-        rank_font = self._font(110 if is_first else 92, weight=800)
+        # Rank numeral — Fraunces, giant, medal-coloured.
+        rank_font = self._serif(118 if is_first else 100, weight=800)
         rank_text = f"{entry.rank:02d}"
         rb = rank_font.getbbox(rank_text)
         rh = rb[3] - rb[1]
@@ -344,8 +385,8 @@ class _Renderer:
         )
         canvas.alpha_composite(ring, (ax - ring_inset, ay - ring_inset))
 
-        # Right-anchored Level tag. Size scales with the row's stature.
-        level_font = self._font(36 if is_first else 32, weight=700)
+        # Right-anchored Level tag — Bricolage, bigger than v3.
+        level_font = self._sans(46 if is_first else 42, weight=700)
         level_text = f"Level {entry.level}"
         level_w = _text_width(draw, level_text, level_font)
         level_x = CANVAS_W - H_PAD - 32 - level_w
@@ -354,11 +395,13 @@ class _Renderer:
         level_y = y + (row_h - lh) // 2 - lb[1]
         draw.text((level_x, level_y), level_text, font=level_font, fill=medal_color)
 
-        # Name — adaptive sizing to fill remaining space.
+        # Name — Fraunces, adaptive sizing to fill remaining space.
         text_x = ax + avatar_size + 36
         name_max = level_x - text_x - 40
         size_bounds = NAME_FIT_TOP1 if is_first else NAME_FIT_TOP23
-        name_font, name = self._fit_name(entry.display_name, name_max, size_bounds)
+        name_font, name = self._fit_name(
+            entry.display_name, name_max, size_bounds, family="serif", weight=700
+        )
         nb = name_font.getbbox(name)
         nh = nb[3] - nb[1]
         ny = y + (row_h - nh) // 2 - nb[1]
@@ -376,8 +419,8 @@ class _Renderer:
 
         draw = ImageDraw.Draw(canvas, "RGBA")
 
-        # Rank.
-        rank_font = self._font(58, weight=700)
+        # Rank (Bricolage; serif is reserved for the podium).
+        rank_font = self._sans(62, weight=700)
         rank_text = f"{entry.rank:02d}"
         rb = rank_font.getbbox(rank_text)
         rh = rb[3] - rb[1]
@@ -402,17 +445,17 @@ class _Renderer:
         )
         canvas.alpha_composite(ring, (ax - 2, ay - 2))
 
-        # Right-anchored Level tag.
-        level_font = self._font(26, weight=700)
+        # Right-anchored Level tag — bigger, brighter.
+        level_font = self._sans(32, weight=700)
         level_text = f"Level {entry.level}"
         level_w = _text_width(draw, level_text, level_font)
-        level_x = CANVAS_W - H_PAD - 26 - level_w
+        level_x = CANVAS_W - H_PAD - 28 - level_w
         lb = level_font.getbbox(level_text)
         lh = lb[3] - lb[1]
         level_y = y + (row_h - lh) // 2 - lb[1]
-        draw.text((level_x, level_y), level_text, font=level_font, fill=TEXT_SECONDARY)
+        draw.text((level_x, level_y), level_text, font=level_font, fill=TEXT_PRIMARY)
 
-        # Name — adaptive, fills the middle.
+        # Name — Bricolage, adaptive, fills the middle.
         name_x = ax + AVATAR_STD + 28
         name_max = level_x - name_x - 32
         name_font, name = self._fit_name(entry.display_name, name_max, NAME_FIT_STD)
