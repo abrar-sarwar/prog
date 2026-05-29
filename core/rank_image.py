@@ -92,27 +92,27 @@ def _accent_for(level: int) -> tuple[int, int, int]:
 # Layout constants
 # ---------------------------------------------------------------------------
 
-CANVAS_W = 1200
-CANVAS_H = 620
-H_PAD = 56
+CANVAS_W = 1280
+CANVAS_H = 760
+H_PAD = 60
 
-SERVER_ICON_SIZE = 64
-SERVER_ICON_RADIUS = 14
+SERVER_ICON_SIZE = 68
+SERVER_ICON_RADIUS = 16
 
-AVATAR_SIZE = 248
+AVATAR_SIZE = 268
 
-PROGRESS_BAR_HEIGHT = 22
-PROGRESS_BAR_RADIUS = 11
+PROGRESS_BAR_HEIGHT = 28
+PROGRESS_BAR_RADIUS = 14
 
 # Hero columns. Avatar starts at H_PAD; identity column is centre;
-# stats column is right. Tuned so the level number doesn't crowd the
-# stats and the stats don't get too narrow for "NEXT TIER: ASCENDANT".
-HERO_TOP_Y = 160
-IDENTITY_COL_X = H_PAD + AVATAR_SIZE + 48        # 352 with current values
-IDENTITY_COL_RIGHT = 700
-STATS_COL_X = 732
-STATS_COL_TOP_Y = 188
-STATS_ROW_H = 70
+# stats column is right. All three are widened from v4 so the bigger
+# LEVEL number + bigger stat type have breathing room.
+HERO_TOP_Y = 180
+IDENTITY_COL_X = H_PAD + AVATAR_SIZE + 56        # 384 with current values
+IDENTITY_COL_RIGHT = 760
+STATS_COL_X = 800
+STATS_COL_TOP_Y = 220
+STATS_ROW_H = 92
 
 
 # ---------------------------------------------------------------------------
@@ -373,10 +373,12 @@ class _RankRenderer:
             fill=self.accent + (255,),
         )
 
-        # "LEVEL" mini-label then giant Fraunces numeral.
-        lvl_label_font = self._sans(22, weight=700)
+        # "LEVEL" mini-label, then huge Bricolage numeral.
+        # Bricolage at weight 800 reads much cleaner than the high-
+        # contrast Fraunces serif at large sizes.
+        lvl_label_font = self._sans(28, weight=700)
         lvl_label_text = "LEVEL"
-        lvl_label_y = tier_y + 64
+        lvl_label_y = tier_y + 72
         draw.text(
             (rx, lvl_label_y),
             lvl_label_text,
@@ -384,11 +386,10 @@ class _RankRenderer:
             fill=TEXT_DIM,
         )
 
-        big_level_font = self._serif(132, weight=800)
+        big_level_font = self._sans(156, weight=800)
         big_level_text = str(self.data.level)
-        # Place tight under the label.
         draw.text(
-            (rx - 4, lvl_label_y + 26),
+            (rx - 6, lvl_label_y + 34),
             big_level_text,
             font=big_level_font,
             fill=self.accent + (255,),
@@ -412,8 +413,8 @@ class _RankRenderer:
             return
 
         draw = ImageDraw.Draw(canvas, "RGBA")
-        label_font = self._sans(17, weight=700)
-        value_font = self._sans(30, weight=700)
+        label_font = self._sans(22, weight=700)
+        value_font = self._sans(40, weight=700)
 
         col_x = STATS_COL_X
         col_right = CANVAS_W - H_PAD
@@ -421,24 +422,22 @@ class _RankRenderer:
 
         for i, (label, value) in enumerate(cells):
             row_y = STATS_COL_TOP_Y + i * STATS_ROW_H
-            # Tiny solid square in the tier accent — anchors the row
-            # without surrounding it with a border.
-            dot_size = 7
+            # Tier-accent square anchor — bigger now so it stays
+            # proportional to the larger label.
+            dot_size = 10
             draw.rectangle(
-                (col_x, row_y + 6, col_x + dot_size, row_y + 6 + dot_size),
+                (col_x, row_y + 8, col_x + dot_size, row_y + 8 + dot_size),
                 fill=self.accent + (255,),
             )
-            # Label sits to the right of the square.
             draw.text(
-                (col_x + dot_size + 10, row_y),
+                (col_x + dot_size + 12, row_y),
                 label,
                 font=label_font,
                 fill=TEXT_DIM,
             )
-            # Value beneath, aligned to the column's left edge.
             value = _truncate(value, value_font, value_max_w)
             draw.text(
-                (col_x, row_y + 26),
+                (col_x, row_y + 34),
                 value,
                 font=value_font,
                 fill=TEXT_PRIMARY,
@@ -472,7 +471,7 @@ class _RankRenderer:
     def _draw_progress(self, canvas: Image.Image) -> None:
         draw = ImageDraw.Draw(canvas, "RGBA")
         bar_x = H_PAD
-        bar_y = CANVAS_H - 88
+        bar_y = CANVAS_H - 108
         bar_w = CANVAS_W - 2 * H_PAD
         bar_h = PROGRESS_BAR_HEIGHT
 
@@ -516,7 +515,7 @@ class _RankRenderer:
             )
 
         # Caption beneath the bar.
-        cap_font = self._sans(24, weight=700)
+        cap_font = self._sans(28, weight=700)
         cb = cap_font.getbbox(caption)
         cap_y = bar_y + bar_h + 18
         draw.text(
