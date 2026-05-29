@@ -102,34 +102,39 @@ STRIPE_INSET = 18     # how far in from the card's left edge the stripe sits
 
 # Per-rank podium dimensions. The hierarchy is physical: 1st > 2nd > 3rd
 # in row height, ordinal-label size, avatar size, name-bounds, and Level
-# size. Numbers were tuned so a 14-char name on each row reads as
-# roughly the same "presence" — bigger on 1st, smaller on 3rd.
+# size. Ordinals are smaller than v5; the gap between podium and field
+# closes from below (see STANDARD_RANK_SIZE).
 _PODIUM_DIMS: dict[int, dict] = {
     1: {
         "row_h": 244,
-        "ordinal_size": 132,
+        "ordinal_size": 112,
         "avatar": 156,
-        "name_fit": (52, 96),
-        "level_size": 52,
+        "name_fit": (54, 100),
+        "name_weight": 800,    # 1st place name is the boldest in the whole card
+        "level_size": 60,
     },
     2: {
         "row_h": 218,
-        "ordinal_size": 106,
+        "ordinal_size": 92,
         "avatar": 130,
-        "name_fit": (44, 80),
-        "level_size": 42,
+        "name_fit": (46, 84),
+        "name_weight": 700,
+        "level_size": 50,
     },
     3: {
         "row_h": 196,
-        "ordinal_size": 88,
+        "ordinal_size": 76,
         "avatar": 108,
-        "name_fit": (38, 66),
-        "level_size": 36,
+        "name_fit": (40, 70),
+        "name_weight": 700,
+        "level_size": 44,
     },
 }
 
-# Avatar size for ranks 4-10.
+# Standard-row dimensions (ranks 4-10).
 AVATAR_STD = 74
+STANDARD_RANK_SIZE = 70    # was 56 in v5 — bumped to meet the smaller podium
+STANDARD_LEVEL_SIZE = 38   # was 32 in v5
 
 # Server icon at top-left.
 SERVER_ICON_SIZE = 116
@@ -421,10 +426,15 @@ class _Renderer:
         draw.text((level_x, level_y), level_text, font=level_font, fill=medal_color)
 
         # Name — Bricolage sans-serif (matches the rest of the field).
+        # 1st place uses weight 800 (boldest), others 700.
         text_x = ax + avatar_size + 36
         name_max = level_x - text_x - 40
         name_font, name = self._fit_name(
-            entry.display_name, name_max, dims["name_fit"], family="sans", weight=700
+            entry.display_name,
+            name_max,
+            dims["name_fit"],
+            family="sans",
+            weight=dims["name_weight"],
         )
         nb = name_font.getbbox(name)
         nh = nb[3] - nb[1]
@@ -444,7 +454,7 @@ class _Renderer:
         draw = ImageDraw.Draw(canvas, "RGBA")
 
         # Rank (Bricolage; serif is reserved for the podium).
-        rank_font = self._sans(56, weight=700)
+        rank_font = self._sans(STANDARD_RANK_SIZE, weight=700)
         rank_text = _ordinal(entry.rank)
         rb = rank_font.getbbox(rank_text)
         rh = rb[3] - rb[1]
@@ -470,7 +480,7 @@ class _Renderer:
         canvas.alpha_composite(ring, (ax - 2, ay - 2))
 
         # Right-anchored Level tag — bigger, brighter.
-        level_font = self._sans(32, weight=700)
+        level_font = self._sans(STANDARD_LEVEL_SIZE, weight=700)
         level_text = f"Level {entry.level}"
         level_w = _text_width(draw, level_text, level_font)
         level_x = CANVAS_W - H_PAD - 28 - level_w
