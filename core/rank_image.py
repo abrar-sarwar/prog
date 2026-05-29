@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +41,7 @@ from core.leaderboard_image import (
 from core.leveling import (
     LEVEL_CAP,
     cumulative_xp_to_level,
+    get_next_tier_for_level,
     get_tier_for_level,
 )
 
@@ -87,16 +89,21 @@ def _accent_for(level: int) -> tuple[int, int, int]:
 # ---------------------------------------------------------------------------
 
 CANVAS_W = 1200
-CANVAS_H = 620
+CANVAS_H = 780
 H_PAD = 56
 
 SERVER_ICON_SIZE = 64
 SERVER_ICON_RADIUS = 14
 
-AVATAR_SIZE = 256
+AVATAR_SIZE = 248
 
 PROGRESS_BAR_HEIGHT = 22
 PROGRESS_BAR_RADIUS = 11
+
+# Stats strip — four cells in one horizontal row.
+STATS_STRIP_Y = 504
+STATS_STRIP_H = 100
+STATS_CELL_GAP = 22
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +123,11 @@ class RankCardData:
     total_members: int
     level: int
     total_xp: int
+    # Stats-strip fields (added in the appealing-card pass).
+    joined_at: Optional[datetime] = None      # member.joined_at
+    account_created_at: Optional[datetime] = None  # member.created_at
+    text_xp_total: int = 0
+    voice_xp_total: int = 0
 
 
 def render_rank_png(data: RankCardData) -> bytes:
@@ -174,6 +186,7 @@ class _RankRenderer:
 
         self._draw_top_stripe(canvas)
         self._draw_hero(canvas)
+        self._draw_stats_strip(canvas)
         self._draw_progress(canvas)
 
         buf = io.BytesIO()
@@ -373,10 +386,102 @@ class _RankRenderer:
 
     # ---------- progress ----------
 
+    # ---------- stats strip ----------
+
+    def _draw_stats_strip(self, canvas: Image.Image) -> None:
+        """Four-cell stat row: joined server, joined Discord, activity
+        mix, next tier preview. Each cell has a tiny accent strut on
+        the left, an uppercase dim label, and a bright primary value."""
+        cells = self._build_stat_cells()
+        if not cells:
+            return
+
+        draw = ImageDraw.Draw(canvas, "RGBA")
+
+        # Thin keyline above the strip.
+        draw.line(
+            [(H_PAD, STATS_STRIP_Y - 12), (CANVAS_W - H_PAD, STATS_STRIP_Y - 12)],
+            fill=(160, 134, 215, 60),
+            width=1,
+        )
+
+        usable_w = CANVAS_W - 2 * H_PAD - (len(cells) - 1) * STATS_CELL_GAP
+        cell_w = usable_w // len(cells)
+
+        label_font = self._sans(17, weight=700)
+        value_font = self._sans(28, weight=700)
+
+        for i, (label, value) in enumerate(cells):
+            cx = H_PAD + i * (cell_w + STATS_CELL_GAP)
+            self._draw_one_stat_cell(
+                canvas, cx, STATS_STRIP_Y, cell_w, label, value,
+                label_font=label_font, value_font=value_font,
+            )
+
+    def _build_stat_cells(self) -> list[tuple[str, str]]:
+        """Return the (label, value) pairs to render in the stats strip."""
+        d = self.data
+
+        def _month_year(dt: Optional[datetime]) -> str:
+            if dt is None:
+                return "—"
+            return dt.strftime("%b %Y").upper()
+
+        # Activity split: which source produced more XP. Falls back to
+        # "—" when the user genuinely has zero XP from both sources
+        # (which shouldn't happen on /rank because we early-return for
+        # users with no row, but defensive).
+        total = d.text_xp_total + d.voice_xp_total
+        if total <= 0:
+            activity = "—"
+        else:
+            text_pct = round(d.text_xp_total / total * 100)
+            if text_pct >= 50:
+                activity = f"{text_pct}% TEXT"
+            else:
+                activity = f"{100 - text_pct}% VOICE"
+
+        next_tier = get_next_tier_for_level(d.level)
+        next_tier_label = next_tier.upper() if next_tier else "MAX TIER"
+
+        return [
+            ("JOINED SERVER", _month_year(d.joined_at)),
+            ("JOINED DISCORD", _month_year(d.account_created_at)),
+            ("ACTIVITY", activity),
+            ("NEXT TIER", next_tier_label),
+        ]
+
+    def _draw_one_stat_cell(
+        self,
+        canvas: Image.Image,
+        x: int,
+        y: int,
+        width: int,
+        label: str,
+        value: str,
+        *,
+        label_font: ImageFont.FreeTypeFont,
+        value_font: ImageFont.FreeTypeFont,
+    ) -> None:
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        # Vertical strut on the left in the tier accent.
+        strut_y0 = y + 4
+        strut_y1 = y + 60
+        draw.line(
+            [(x, strut_y0), (x, strut_y1)],
+            fill=self.accent + (255,),
+            width=3,
+        )
+        # Label.
+        draw.text((x + 14, y + 2), label, font=label_font, fill=TEXT_DIM)
+        # Value (truncated to cell width).
+        value = _truncate(value, value_font, width - 16)
+        draw.text((x + 14, y + 32), value, font=value_font, fill=TEXT_PRIMARY)
+
     def _draw_progress(self, canvas: Image.Image) -> None:
         draw = ImageDraw.Draw(canvas, "RGBA")
         bar_x = H_PAD
-        bar_y = CANVAS_H - 96
+        bar_y = CANVAS_H - 88
         bar_w = CANVAS_W - 2 * H_PAD
         bar_h = PROGRESS_BAR_HEIGHT
 

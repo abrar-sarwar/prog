@@ -26,7 +26,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core.constants import LEADERBOARD_IMAGE_TOP_N
+from core.constants import LEADERBOARD_TOP_N
 from core.leaderboard_image import (
     LeaderboardEntry,
     render_png as render_leaderboard_png,
@@ -127,6 +127,14 @@ class UserCommands(commands.Cog):
             total_members=total,
             level=row.level,
             total_xp=row.xp,
+            # Stats-strip data: when the user joined the server (Discord
+            # exposes this as None if the bot lacks the Members intent at
+            # the right moment; safe to pass through), when their account
+            # was made, and the text/voice XP split.
+            joined_at=target.joined_at,
+            account_created_at=target.created_at,
+            text_xp_total=row.text_xp_total,
+            voice_xp_total=row.voice_xp_total,
         )
 
         loop = asyncio.get_running_loop()
@@ -145,10 +153,19 @@ class UserCommands(commands.Cog):
 
     @app_commands.command(
         name="leaderboard",
-        description="Show the top 10 leaderboard",
+        description="Show a 5-entry leaderboard centered on you",
     )
     async def leaderboard(self, interaction: discord.Interaction) -> None:
-        """Render and send the top-10 image as an ephemeral reply."""
+        """Render a sliding 5-row window centred on the invoker.
+
+        * Invoker ranked 1-3 → window is ranks 1-5 (with the invoker
+          highlighted by tier-magenta + a YOU badge).
+        * Invoker in the middle → 2 ahead + invoker + 2 behind.
+        * Invoker in the bottom 2 → the last 5 ranks.
+        * Invoker has no XP row → falls back to the top 5 with no
+          highlight, plus a "You're not on the board yet" ephemeral
+          line above the image.
+        """
         if interaction.guild is None:
             await interaction.response.send_message(
                 "Use this in a server.", ephemeral=True
@@ -158,14 +175,30 @@ class UserCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         guild = interaction.guild
-        async with get_session_factory()() as session:
-            top = list(
-                await crud.get_top_users(
-                    session, guild.id, limit=LEADERBOARD_IMAGE_TOP_N
-                )
-            )
+        invoker_id = interaction.user.id
+        not_on_board = False
 
-        if not top:
+        async with get_session_factory()() as session:
+            invoker_rank = await crud.get_user_rank(
+                session, guild.id, invoker_id
+            )
+            if invoker_rank is None:
+                # No row for this user yet — show the top 5 instead and
+                # tell them above the image.
+                not_on_board = True
+                start_rank = 1
+                rows = list(
+                    await crud.get_top_users(
+                        session, guild.id, limit=LEADERBOARD_TOP_N
+                    )
+                )
+            else:
+                start_rank, rows_seq = await crud.get_users_around_rank(
+                    session, guild.id, invoker_rank, window=LEADERBOARD_TOP_N
+                )
+                rows = list(rows_seq)
+
+        if not rows:
             await interaction.followup.send(
                 "No one has earned XP yet — be the first.",
                 ephemeral=True,
@@ -173,7 +206,8 @@ class UserCommands(commands.Cog):
             return
 
         # Fetch the guild icon once + every avatar in parallel.
-        async def _entry(i: int, row) -> LeaderboardEntry:
+        async def _entry(idx: int, row) -> LeaderboardEntry:
+            absolute_rank = start_rank + idx
             member = guild.get_member(row.user_id)
             display_name = (
                 member.display_name
@@ -184,7 +218,7 @@ class UserCommands(commands.Cog):
                 await _read_avatar(member) if member is not None else None
             )
             return LeaderboardEntry(
-                rank=i + 1,
+                rank=absolute_rank,
                 display_name=display_name,
                 level=row.level,
                 xp=row.xp,
@@ -193,7 +227,7 @@ class UserCommands(commands.Cog):
 
         guild_icon_bytes, *entries = await asyncio.gather(
             _read_guild_icon(guild),
-            *(_entry(i, row) for i, row in enumerate(top)),
+            *(_entry(i, row) for i, row in enumerate(rows)),
         )
 
         from datetime import datetime, timezone
@@ -206,10 +240,17 @@ class UserCommands(commands.Cog):
                 guild_icon_bytes=guild_icon_bytes,
                 entries=entries,
                 rendered_at=datetime.now(tz=timezone.utc),
+                highlight_rank=invoker_rank,
             ),
         )
 
+        content = (
+            "You're not on the board yet — send a message to start earning XP."
+            if not_on_board
+            else None
+        )
         await interaction.followup.send(
+            content=content,
             file=discord.File(
                 io.BytesIO(png_bytes), filename=_LEADERBOARD_FILENAME
             ),

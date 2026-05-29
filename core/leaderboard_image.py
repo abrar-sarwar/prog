@@ -71,6 +71,8 @@ BG_BOTTOM = (27, 14, 50)
 # Surface tints for row cards (low-alpha overlays on the gradient).
 SURFACE_TOP3 = (255, 255, 255, 22)
 SURFACE_STD = (255, 255, 255, 12)
+SURFACE_HIGHLIGHT = (244, 114, 182, 50)   # magenta-tinted, more opaque
+ACCENT_HIGHLIGHT = (244, 114, 182, 255)   # solid magenta — accent stripe colour
 
 # Hairline keylines.
 KEYLINE = (160, 134, 215, 70)
@@ -167,17 +169,29 @@ def render_png(
     guild_icon_bytes: Optional[bytes],
     entries: list[LeaderboardEntry],
     rendered_at: datetime,
+    highlight_rank: Optional[int] = None,
 ) -> bytes:
     """Render the leaderboard card to PNG bytes.
 
-    Blocks for ~50-200 ms depending on row count and image sizes — run
-    via ``loop.run_in_executor`` from async contexts.
+    Each entry's ``rank`` field decides its styling: ``rank <= 3`` gets
+    the podium treatment, the rest get the standard row. This means the
+    same renderer handles both the channel's static top-10 and the
+    /leaderboard slash command's sliding window.
+
+    ``highlight_rank`` (optional) brightens the matching row and adds a
+    magenta accent stripe + a small "YOU" badge on the right, so the
+    invoker can spot themselves at a glance. Has no effect if no row in
+    ``entries`` matches.
+
+    Blocks for ~50-200 ms — run via ``loop.run_in_executor`` from async
+    contexts.
     """
     return _Renderer(
         guild_name=guild_name,
         guild_icon_bytes=guild_icon_bytes,
         entries=entries,
         rendered_at=rendered_at,
+        highlight_rank=highlight_rank,
     ).render()
 
 
@@ -194,19 +208,24 @@ class _Renderer:
         guild_icon_bytes: Optional[bytes],
         entries: list[LeaderboardEntry],
         rendered_at: datetime,
+        highlight_rank: Optional[int] = None,
     ) -> None:
         self.guild_name = guild_name
         self.guild_icon_bytes = guild_icon_bytes
         self.entries = entries
         self.rendered_at = rendered_at
+        self.highlight_rank = highlight_rank
 
-        self.top3 = entries[:3]
-        self.rest = entries[3:]
-        podium_h = sum(_PODIUM_DIMS[e.rank]["row_h"] for e in self.top3)
+        # Split by rank value, not list position. A 5-row window centred
+        # on rank 6 has zero "podium" rows; a window centred on rank 2
+        # has three. The persistent top-10 falls into both cases too.
+        self.podium = [e for e in entries if e.rank <= 3]
+        self.standard = [e for e in entries if e.rank > 3]
+        podium_h = sum(_PODIUM_DIMS[e.rank]["row_h"] for e in self.podium)
         self.height = (
             HEADER_H
             + podium_h
-            + len(self.rest) * STANDARD_ROW_H
+            + len(self.standard) * STANDARD_ROW_H
             + BOTTOM_PAD
         )
 
@@ -218,14 +237,20 @@ class _Renderer:
         canvas = self._make_background(CANVAS_W, self.height)
 
         y = self._draw_header(canvas)
-        for entry in self.top3:
+        for entry in self.podium:
             y = self._draw_podium_row(canvas, entry, y)
-        for entry in self.rest:
+        for entry in self.standard:
             y = self._draw_standard_row(canvas, entry, y)
 
         buf = io.BytesIO()
         canvas.convert("RGB").save(buf, format="PNG", optimize=True)
         return buf.getvalue()
+
+    def _is_highlight(self, entry: LeaderboardEntry) -> bool:
+        return (
+            self.highlight_rank is not None
+            and entry.rank == self.highlight_rank
+        )
 
     # ---------- fonts ----------
 
@@ -384,10 +409,15 @@ class _Renderer:
         medal_color = {1: GOLD, 2: SILVER, 3: BRONZE}[entry.rank]
         avatar_size = dims["avatar"]
 
-        _draw_row_card(canvas, y, row_h, fill=SURFACE_TOP3, keyline=KEYLINE)
+        highlighted = self._is_highlight(entry)
+        surface = SURFACE_HIGHLIGHT if highlighted else SURFACE_TOP3
+        _draw_row_card(canvas, y, row_h, fill=surface, keyline=KEYLINE)
         _draw_left_stripe(canvas, y, row_h, color=medal_color)
 
         draw = ImageDraw.Draw(canvas, "RGBA")
+
+        if highlighted:
+            _draw_highlight_outline(canvas, y, row_h)
 
         # Ordinal label — Fraunces, medal-coloured, podium-scaled.
         ordinal_text = _ordinal(entry.rank)
@@ -430,7 +460,12 @@ class _Renderer:
         # Name — Bricolage sans-serif (matches the rest of the field).
         # 1st place uses weight 800 (boldest), others 700.
         text_x = ax + avatar_size + 36
-        name_max = level_x - text_x - 40
+        # Reserve room for an optional YOU badge when highlighted so the
+        # name truncates cleanly instead of bumping into the badge.
+        right_block_left = level_x
+        if highlighted:
+            right_block_left -= 92  # YOU badge width + gutter
+        name_max = right_block_left - text_x - 40
         name_font, name = self._fit_name(
             entry.display_name,
             name_max,
@@ -443,6 +478,14 @@ class _Renderer:
         ny = y + (row_h - nh) // 2 - nb[1]
         draw.text((text_x, ny), name, font=name_font, fill=TEXT_PRIMARY)
 
+        if highlighted:
+            _draw_you_badge(
+                canvas,
+                x_right=level_x - 24,
+                y_centre=y + row_h // 2,
+                font=self._sans(22, weight=800),
+            )
+
         return y + row_h
 
     # ---------- standard rows (ranks 4..10) ----------
@@ -451,9 +494,18 @@ class _Renderer:
         self, canvas: Image.Image, entry: LeaderboardEntry, y: int
     ) -> int:
         row_h = STANDARD_ROW_H
-        _draw_row_card(canvas, y, row_h, fill=SURFACE_STD, keyline=KEYLINE)
+        highlighted = self._is_highlight(entry)
+        surface = SURFACE_HIGHLIGHT if highlighted else SURFACE_STD
+        _draw_row_card(canvas, y, row_h, fill=surface, keyline=KEYLINE)
 
         draw = ImageDraw.Draw(canvas, "RGBA")
+
+        if highlighted:
+            # Accent magenta stripe on the left edge so the highlighted
+            # standard row gets its own visual marker (mirrors the medal
+            # stripe used for the podium rows).
+            _draw_left_stripe(canvas, y, row_h, color=ACCENT_HIGHLIGHT)
+            _draw_highlight_outline(canvas, y, row_h)
 
         # Rank (Bricolage; serif is reserved for the podium).
         rank_font = self._sans(STANDARD_RANK_SIZE, weight=700)
@@ -493,12 +545,23 @@ class _Renderer:
 
         # Name — Bricolage, adaptive, fills the middle.
         name_x = ax + AVATAR_STD + 28
-        name_max = level_x - name_x - 32
+        right_block_left = level_x
+        if highlighted:
+            right_block_left -= 84  # leave room for the YOU badge
+        name_max = right_block_left - name_x - 32
         name_font, name = self._fit_name(entry.display_name, name_max, NAME_FIT_STD)
         nb = name_font.getbbox(name)
         nh = nb[3] - nb[1]
         ny = y + (row_h - nh) // 2 - nb[1]
         draw.text((name_x, ny), name, font=name_font, fill=TEXT_PRIMARY)
+
+        if highlighted:
+            _draw_you_badge(
+                canvas,
+                x_right=level_x - 20,
+                y_centre=y + row_h // 2,
+                font=self._sans(18, weight=800),
+            )
 
         return y + row_h
 
@@ -631,6 +694,58 @@ def _draw_row_card(
         [(H_PAD + CARD_RADIUS, y + h - 1), (CANVAS_W - H_PAD - CARD_RADIUS, y + h - 1)],
         fill=keyline,
         width=1,
+    )
+
+
+def _draw_highlight_outline(canvas: Image.Image, y: int, h: int) -> None:
+    """Thin magenta hairline around a highlighted row card.
+
+    Pairs with the SURFACE_HIGHLIGHT fill to make the invoker's row
+    pop without overpowering the rest of the list.
+    """
+    card_w = CANVAS_W - 2 * H_PAD
+    outline = Image.new("RGBA", (card_w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(outline).rounded_rectangle(
+        (0, 0, card_w - 1, h - 1),
+        radius=CARD_RADIUS,
+        outline=(244, 114, 182, 180),
+        width=2,
+    )
+    canvas.alpha_composite(outline, (H_PAD, y))
+
+
+def _draw_you_badge(
+    canvas: Image.Image,
+    *,
+    x_right: int,
+    y_centre: int,
+    font: ImageFont.FreeTypeFont,
+) -> None:
+    """Small magenta pill that reads ``YOU`` — appears on the
+    highlighted row so the invoker can spot themselves immediately."""
+    pad_x = 14
+    pad_y = 6
+    d = ImageDraw.Draw(canvas, "RGBA")
+    text = "YOU"
+    bbox = font.getbbox(text)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    chip_w = tw + pad_x * 2
+    chip_h = th + pad_y * 2
+    x1 = x_right
+    x0 = x1 - chip_w
+    y0 = y_centre - chip_h // 2
+    y1 = y0 + chip_h
+    d.rounded_rectangle(
+        (x0, y0, x1, y1),
+        radius=chip_h // 2,
+        fill=ACCENT_HIGHLIGHT,
+    )
+    d.text(
+        (x0 + pad_x - bbox[0], y0 + pad_y - bbox[1]),
+        text,
+        font=font,
+        fill=(20, 8, 32, 255),
     )
 
 

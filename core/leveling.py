@@ -168,6 +168,25 @@ def get_tier_for_level(level: int) -> Optional[str]:
     return None  # unreachable given TIER_BANDS is exhaustive over 1..100
 
 
+def get_next_tier_for_level(level: int) -> Optional[str]:
+    """Return the tier *after* the one containing ``level``, or ``None``
+    if the user is already in (or above) the final band.
+
+    Used by the /rank card to display "Next tier: <name>" as a teaser.
+    For level 0 (no tier yet), the next tier is Freshie.
+    """
+    if level <= 0:
+        return TIER_BANDS[0][2]
+    if level >= LEVEL_CAP:
+        return None
+    for i, (lo, hi, _name, _role) in enumerate(TIER_BANDS):
+        if lo <= level <= hi:
+            if i + 1 < len(TIER_BANDS):
+                return TIER_BANDS[i + 1][2]
+            return None
+    return None
+
+
 def get_tier_role_name(level: int) -> Optional[str]:
     """Return the Discord role name for ``level``, or ``None`` for level 0."""
     if level <= 0:
