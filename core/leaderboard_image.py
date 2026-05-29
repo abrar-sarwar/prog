@@ -7,19 +7,20 @@ Discord's retina displays.
 Design language — "editorial scoreboard"
 ----------------------------------------
 * One sans-serif family (Bricolage Grotesque variable) for *everything*.
-  Hierarchy comes from weight + size contrast, not from font swapping.
+  Hierarchy comes from weight + size contrast.
 * Deep aubergine vertical gradient. No grain, no vignette — flat
   surface so text contrast is maximal.
 * Server icon at the top-left in a rounded square (coat-of-arms inset).
-* Title "LEADERBOARD" in heavy weight, tight tracking. Server name
-  immediately below as the matching subtitle.
-* Top-3 podium emphasis is purely structural: each top-3 row has a
-  6px medal-coloured stripe on its left edge plus a hairline ring on
-  the avatar. No micro-text "chips" — those were unreadable in v1.
-* Rank numerals are the loudest element: giant in the top 3, large in
-  the rest. Tabular figures + medal colour for 1/2/3.
-* Footer is a single subtle line — wordmark + "UPDATED at HH:MM UTC".
-  No "LIVE" indicator.
+* Title "LEADERBOARD" in heavy weight, server name immediately below.
+* Top-3 podium emphasis is structural: each top-3 row has a 6px
+  medal-coloured stripe on its left edge plus a hairline medal ring
+  on the avatar.
+* Names are the heroes — they auto-size *per row* to fill the
+  available width, capped only by what the row can hold vertically.
+  Short names render giant; long names downsize and finally truncate.
+* The only number besides the rank is the user's Level. XP is
+  intentionally omitted to keep visual density low.
+* No footer, no timestamp. The card is just the leaderboard.
 
 The renderer is pure synchronous Pillow code — call ``render_png`` from
 an executor so it never blocks the gateway loop.
@@ -76,22 +77,29 @@ BRONZE = (232, 148, 93, 255)
 
 CANVAS_W = 1200
 H_PAD = 56            # left/right outer padding
-HEADER_H = 220
-PODIUM_ROW_H = 200
-STANDARD_ROW_H = 104
-FOOTER_H = 76
+HEADER_H = 200
+PODIUM_ROW_H = 210
+STANDARD_ROW_H = 112
+BOTTOM_PAD = 24       # space below the last row (replaces the footer)
 CARD_RADIUS = 24
 STRIPE_WIDTH = 6
 STRIPE_INSET = 18     # how far in from the card's left edge the stripe sits
 
 # Avatar sizes per rank tier
-AVATAR_TOP1 = 132
-AVATAR_TOP23 = 110
-AVATAR_STD = 64
+AVATAR_TOP1 = 140
+AVATAR_TOP23 = 118
+AVATAR_STD = 68
 
 # Server icon at top-left.
 SERVER_ICON_SIZE = 108
 SERVER_ICON_RADIUS = 22
+
+# Adaptive name-fit bounds. The renderer picks the largest weight=700
+# size in [min, max] that lets the full name fit in the available width;
+# only if even the min won't fit does it ellipsize.
+NAME_FIT_TOP1 = (44, 88)
+NAME_FIT_TOP23 = (40, 76)
+NAME_FIT_STD = (30, 58)
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +163,7 @@ class _Renderer:
             HEADER_H
             + len(self.top3) * PODIUM_ROW_H
             + len(self.rest) * STANDARD_ROW_H
-            + FOOTER_H
+            + BOTTOM_PAD
         )
 
         self._fonts: dict[str, ImageFont.FreeTypeFont] = {}
@@ -170,7 +178,6 @@ class _Renderer:
             y = self._draw_podium_row(canvas, entry, y)
         for entry in self.rest:
             y = self._draw_standard_row(canvas, entry, y)
-        self._draw_footer(canvas, y)
 
         buf = io.BytesIO()
         canvas.convert("RGB").save(buf, format="PNG", optimize=True)
@@ -265,22 +272,34 @@ class _Renderer:
             fill=TEXT_SECONDARY,
         )
 
-        # Top-right rendered-at tag.
-        ts_font = self._font(22, weight=600)
-        ts_text = self.rendered_at.strftime("%b %d  ·  %H:%M UTC").upper()
-        tw = _text_width(draw, ts_text, ts_font)
-        draw.text(
-            (CANVAS_W - H_PAD - tw, y_top + 12),
-            ts_text,
-            font=ts_font,
-            fill=TEXT_DIM,
-        )
-
         # Bottom hairline of the header.
         line_y = HEADER_H - 1
         draw.line([(H_PAD, line_y), (CANVAS_W - H_PAD, line_y)], fill=KEYLINE, width=1)
 
         return HEADER_H
+
+    # ---------- adaptive name-fit ----------
+
+    def _fit_name(
+        self,
+        name: str,
+        max_width: int,
+        size_bounds: tuple[int, int],
+        weight: int = 700,
+    ) -> tuple[ImageFont.FreeTypeFont, str]:
+        """Pick the largest weight-``weight`` size in ``size_bounds`` that
+        lets ``name`` fit in ``max_width``. If even the minimum size
+        overflows, returns the min-size font and an ellipsized name.
+        """
+        min_size, max_size = size_bounds
+        # Walk down in 2pt steps for a smooth landing on tight bounds.
+        for size in range(max_size, min_size - 1, -2):
+            font = self._font(size, weight=weight)
+            bbox = font.getbbox(name)
+            if bbox[2] - bbox[0] <= max_width:
+                return font, name
+        font = self._font(min_size, weight=weight)
+        return font, _truncate(name, font, max_width)
 
     # ---------- podium rows (ranks 1..3) ----------
 
@@ -292,15 +311,12 @@ class _Renderer:
         avatar_size = AVATAR_TOP1 if is_first else AVATAR_TOP23
         row_h = PODIUM_ROW_H
 
-        # Card surface.
         _draw_row_card(canvas, y, row_h, fill=SURFACE_TOP3, keyline=KEYLINE)
-
-        # Medal-coloured left stripe — the *only* signal for medal tier.
         _draw_left_stripe(canvas, y, row_h, color=medal_color)
 
         draw = ImageDraw.Draw(canvas, "RGBA")
 
-        # Rank numeral — giant medal-coloured numbers, tabular spacing.
+        # Rank numeral — giant medal-coloured numbers.
         rank_font = self._font(110 if is_first else 92, weight=800)
         rank_text = f"{entry.rank:02d}"
         rb = rank_font.getbbox(rank_text)
@@ -309,19 +325,15 @@ class _Renderer:
         rank_y = y + (row_h - rh) // 2 - rb[1]
         draw.text((rank_x, rank_y), rank_text, font=rank_font, fill=medal_color)
 
-        # Avatar position.
+        # Avatar.
         rank_w = rb[2] - rb[0]
         ax = rank_x + rank_w + 40
         ay = y + (row_h - avatar_size) // 2
-
-        # Avatar.
         if entry.avatar_bytes is not None:
             avatar = _circular_image(entry.avatar_bytes, avatar_size)
         else:
             avatar = _avatar_placeholder(avatar_size, medal_color)
         canvas.alpha_composite(avatar, (ax, ay))
-
-        # Hairline medal ring around the avatar.
         ring_inset = 3
         ring_size = avatar_size + 2 * ring_inset
         ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
@@ -332,39 +344,25 @@ class _Renderer:
         )
         canvas.alpha_composite(ring, (ax - ring_inset, ay - ring_inset))
 
-        # Name + meta block.
-        text_x = ax + avatar_size + 36
-        name_size = 50 if is_first else 44
-        name_font = self._font(name_size, weight=700)
-        meta_font = self._font(26, weight=500)
-
-        # Generous right gutter — no chip to worry about now.
-        name_max = CANVAS_W - text_x - H_PAD - 32
-        name = _truncate(entry.display_name, name_font, name_max)
-        name_bbox = name_font.getbbox(name)
-        name_h = name_bbox[3] - name_bbox[1]
-        meta_bbox = meta_font.getbbox("Ay")
-        meta_h = meta_bbox[3] - meta_bbox[1]
-        gap = 14
-        block_h = name_h + gap + meta_h
-        block_y = y + (row_h - block_h) // 2 - name_bbox[1]
-
-        draw.text((text_x, block_y), name, font=name_font, fill=TEXT_PRIMARY)
-
-        meta_y = block_y + name_h + gap
+        # Right-anchored Level tag. Size scales with the row's stature.
+        level_font = self._font(36 if is_first else 32, weight=700)
         level_text = f"Level {entry.level}"
-        xp_text = f"{entry.xp:,} XP"
-        draw.text((text_x, meta_y), level_text, font=meta_font, fill=TEXT_SECONDARY)
-        lw = _text_width(draw, level_text, meta_font)
-        # Soft pill separator dot in medal colour.
-        sep_x = text_x + lw + 18
-        dot_r = 4
-        dot_y = meta_y + (meta_h // 2)
-        draw.ellipse(
-            (sep_x - dot_r, dot_y - dot_r, sep_x + dot_r, dot_y + dot_r),
-            fill=medal_color,
-        )
-        draw.text((sep_x + 16, meta_y), xp_text, font=meta_font, fill=TEXT_DIM)
+        level_w = _text_width(draw, level_text, level_font)
+        level_x = CANVAS_W - H_PAD - 32 - level_w
+        lb = level_font.getbbox(level_text)
+        lh = lb[3] - lb[1]
+        level_y = y + (row_h - lh) // 2 - lb[1]
+        draw.text((level_x, level_y), level_text, font=level_font, fill=medal_color)
+
+        # Name — adaptive sizing to fill remaining space.
+        text_x = ax + avatar_size + 36
+        name_max = level_x - text_x - 40
+        size_bounds = NAME_FIT_TOP1 if is_first else NAME_FIT_TOP23
+        name_font, name = self._fit_name(entry.display_name, name_max, size_bounds)
+        nb = name_font.getbbox(name)
+        nh = nb[3] - nb[1]
+        ny = y + (row_h - nh) // 2 - nb[1]
+        draw.text((text_x, ny), name, font=name_font, fill=TEXT_PRIMARY)
 
         return y + row_h
 
@@ -379,7 +377,7 @@ class _Renderer:
         draw = ImageDraw.Draw(canvas, "RGBA")
 
         # Rank.
-        rank_font = self._font(56, weight=700)
+        rank_font = self._font(58, weight=700)
         rank_text = f"{entry.rank:02d}"
         rb = rank_font.getbbox(rank_text)
         rh = rb[3] - rb[1]
@@ -404,78 +402,26 @@ class _Renderer:
         )
         canvas.alpha_composite(ring, (ax - 2, ay - 2))
 
-        # Name + right-aligned meta.
-        name_font = self._font(34, weight=600)
-        meta_font = self._font(24, weight=500)
+        # Right-anchored Level tag.
+        level_font = self._font(26, weight=700)
+        level_text = f"Level {entry.level}"
+        level_w = _text_width(draw, level_text, level_font)
+        level_x = CANVAS_W - H_PAD - 26 - level_w
+        lb = level_font.getbbox(level_text)
+        lh = lb[3] - lb[1]
+        level_y = y + (row_h - lh) // 2 - lb[1]
+        draw.text((level_x, level_y), level_text, font=level_font, fill=TEXT_SECONDARY)
 
-        # Right-aligned meta: "Level X" (bright) · "XX,XXX XP" (dim).
-        lv_part = f"Level {entry.level}"
-        xp_part = f"{entry.xp:,} XP"
-        lv_w = _text_width(draw, lv_part, meta_font)
-        xp_w = _text_width(draw, xp_part, meta_font)
-        right_edge = CANVAS_W - H_PAD - 24
-        xp_x = right_edge - xp_w
-        sep_x = xp_x - 16
-        lv_x = sep_x - 16 - lv_w
-
-        # Name.
+        # Name — adaptive, fills the middle.
         name_x = ax + AVATAR_STD + 28
-        name_max = lv_x - name_x - 32
-        name = _truncate(entry.display_name, name_font, name_max)
+        name_max = level_x - name_x - 32
+        name_font, name = self._fit_name(entry.display_name, name_max, NAME_FIT_STD)
         nb = name_font.getbbox(name)
         nh = nb[3] - nb[1]
         ny = y + (row_h - nh) // 2 - nb[1]
         draw.text((name_x, ny), name, font=name_font, fill=TEXT_PRIMARY)
 
-        # Vertical-centre the meta.
-        mb = meta_font.getbbox("Ay")
-        mh = mb[3] - mb[1]
-        my = y + (row_h - mh) // 2 - mb[1]
-        draw.text((lv_x, my), lv_part, font=meta_font, fill=TEXT_SECONDARY)
-        draw.ellipse(
-            (sep_x - 3, y + row_h // 2 - 3, sep_x + 3, y + row_h // 2 + 3),
-            fill=TEXT_DIM[:3] + (220,),
-        )
-        draw.text((xp_x, my), xp_part, font=meta_font, fill=TEXT_DIM)
-
         return y + row_h
-
-    # ---------- footer ----------
-
-    def _draw_footer(self, canvas: Image.Image, y: int) -> None:
-        draw = ImageDraw.Draw(canvas, "RGBA")
-        draw.line(
-            [(H_PAD, y), (CANVAS_W - H_PAD, y)],
-            fill=KEYLINE,
-            width=1,
-        )
-        cy = y + FOOTER_H // 2
-
-        # Left wordmark.
-        mark_font = self._font(28, weight=800)
-        mark_text = "prog"
-        mb = mark_font.getbbox(mark_text)
-        mh = mb[3] - mb[1]
-        draw.text(
-            (H_PAD, cy - mh // 2 - mb[1]),
-            mark_text,
-            font=mark_font,
-            fill=TEXT_PRIMARY,
-        )
-
-        # Right timestamp.
-        body_font = self._font(22, weight=600)
-        timestamp = self.rendered_at.strftime("UPDATED %b %d · %H:%M UTC").upper()
-        tw = _text_width(draw, timestamp, body_font)
-        body_bbox = body_font.getbbox(timestamp)
-        body_h = body_bbox[3] - body_bbox[1]
-        draw.text(
-            (CANVAS_W - H_PAD - tw, cy - body_h // 2 - body_bbox[1]),
-            timestamp,
-            font=body_font,
-            fill=TEXT_DIM,
-        )
-
 
 # ---------------------------------------------------------------------------
 # Drawing helpers (module-private; pure functions over Image)
