@@ -70,13 +70,13 @@ _SIDE_GAP = 28             # 2nd/3rd must stop this far short of the column
 # ``min_w`` keeps short-name pills from looking stubby; the pill grows past
 # it to fit longer names. Bumped bigger per request.
 _PODIUM = {
-    1: {"y_top": 226, "height": 224, "name_size": 112, "rank_size": 80,
+    1: {"y_top": 240, "height": 224, "name_size": 150, "rank_size": 80,
         "level_size": 46, "min_w": 660,
         "grad": ((58, 42, 28), (255, 201, 92))},      # gold
-    2: {"y_top": 480, "height": 192, "name_size": 92, "rank_size": 70,
+    2: {"y_top": 492, "height": 192, "name_size": 118, "rank_size": 70,
         "level_size": 38, "min_w": 560,
         "grad": ((40, 27, 58), (140, 83, 240))},      # indigo
-    3: {"y_top": 702, "height": 172, "name_size": 80, "rank_size": 62,
+    3: {"y_top": 710, "height": 172, "name_size": 92, "rank_size": 62,
         "level_size": 34, "min_w": 520,
         "grad": ((58, 44, 76), (176, 141, 230))},     # lighter violet
 }
@@ -369,24 +369,25 @@ _BG_CACHE: dict[tuple[int, int], Image.Image] = {}
 
 
 def _draw_background(w: int, h: int) -> Image.Image:
-    """The original design's background, restored.
+    """The original design's background, restored — smooth, no streaks.
 
-    We take a clean full-height strip from the right edge of the template
-    (past all of its pills and the side column) and stretch it across the
-    whole canvas. That reproduces the exact aubergine gradient + subtle
-    grain of the original art without dragging in any of its baked-in
-    pills or text. Falls back to a plain gradient if the asset is missing.
+    The template art is grainy, so stretching any single column turns that
+    per-pixel noise into visible horizontal lines. Instead we collapse the
+    template to its *average colour per row* (averaging across the full
+    width cancels the grain), then resize that 1px-wide gradient up to the
+    canvas. That keeps the exact aubergine top->bottom colour progression
+    of the original while rendering perfectly smooth. Falls back to a plain
+    gradient if the asset is missing.
     """
     cached = _BG_CACHE.get((w, h))
     if cached is not None:
         return cached.copy()
     try:
         tpl = Image.open(_TEMPLATE_PATH).convert("RGB")
-        tw, th = tpl.size
-        # A clean vertical strip near the right edge (template side column
-        # ends well before this), scaled to fill the canvas.
-        strip = tpl.crop((tw - 60, 0, tw - 6, th))
-        bg = strip.resize((w, h), Image.LANCZOS).convert("RGBA")
+        th = tpl.height
+        # Average every row down to a single column (kills horizontal noise).
+        col = tpl.resize((1, th), Image.BOX)
+        bg = col.resize((w, h), Image.BILINEAR).convert("RGBA")
     except Exception:
         bg = make_atmospheric_background(w, h, orbs=[])
     _BG_CACHE[(w, h)] = bg
