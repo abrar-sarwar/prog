@@ -473,31 +473,34 @@ class _Renderer:
 
         # Avatar — left edges of all three pills share a common x so the
         # avatars line up vertically even though the gold pill is indented
-        # right in the template.
-        av_d = int(pill_h * 0.62)
+        # right in the template. Slightly smaller than before to free up
+        # horizontal room for the name.
+        av_d = int(pill_h * 0.56)
         av_x = _PILL_AVATAR_LEFT
         av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
-        # Level tag, right-aligned inside the pill (before the right cap).
-        level_size = {1: 50, 2: 40, 3: 34}[rank]
+        # Level tag — compact, tucked as far right as the rounded cap
+        # allows so it steals minimal space from the name.
+        level_size = {1: 46, 2: 34, 3: 30}[rank]
         level_img = _slanted_text(
             f"Lv {entry.level}", _fonts.sans(level_size, weight=800), PILL_LEVEL
         )
-        level_right = px1 - pill_h // 2 + int(pill_h * 0.10)
+        level_right = px1 - int(pill_h * 0.34)
         _paste_right_v_centre(canvas, level_img, level_right, cy)
 
-        # Name fills the space between avatar and the level tag. Sizes step
-        # down 1st > 2nd > 3rd to reinforce the podium hierarchy.
-        name_x = av_x + av_d + int(pill_h * 0.12)
-        name_max = (level_right - level_img.width - 20) - name_x
-        max_size = {1: 116, 2: 88, 3: 70}[rank]
+        # Name fills the space between avatar and the level tag. Max sizes
+        # step down 1st > 2nd > 3rd; the low min size means long names
+        # shrink to fit rather than truncating.
+        name_x = av_x + av_d + int(pill_h * 0.10)
+        name_max = (level_right - level_img.width - 18) - name_x
+        max_size = {1: 116, 2: 92, 3: 76}[rank]
         name = _fit_name(
             entry.display_name,
             PILL_TEXT,
             max_w=max(name_max, 40),
             max_size=max_size,
-            min_size=30,
+            min_size=20,
             weight=800,
         )
         _paste_v_centre(canvas, name, name_x, cy)
