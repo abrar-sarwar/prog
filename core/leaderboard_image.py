@@ -85,6 +85,8 @@ TITLE_COLOR = (244, 240, 252)
 
 # Avatar ring tints per pill (subtle, picked to sit on gold/indigo/violet).
 _PILL_RING = {1: (150, 96, 24), 2: (54, 38, 120), 3: (74, 54, 140)}
+# Shared left x for all three pill avatars so they align vertically.
+_PILL_AVATAR_LEFT = 150
 
 # Highlight (viewer) accent.
 ACCENT_HIGHLIGHT = (255, 255, 255)
@@ -105,14 +107,20 @@ class _FontBook:
     def __init__(self) -> None:
         self._fonts: dict[str, ImageFont.FreeTypeFont] = {}
 
-    def sans(self, size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
+    def sans(self, size: int, weight: int = 800) -> ImageFont.FreeTypeFont:
+        # Bricolage Grotesque variable axes, in this fvar order:
+        #   [Optical size (12-96), Weight (200-800), Width (75-100)].
+        # The masthead in the template is the heavy 800 weight; matching
+        # that here is what makes the names read as the same typeface.
         key = f"sans:{size}:{weight}"
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
         font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
         try:
-            font.set_variation_by_axes([weight, 100, min(max(size, 12), 96)])
+            font.set_variation_by_axes(
+                [min(max(size, 12), 96), max(min(weight, 800), 200), 100]
+            )
         except Exception:
             pass
         self._fonts[key] = font
@@ -463,32 +471,34 @@ class _Renderer:
         cy = (py0 + py1) // 2
         pill_h = py1 - py0
 
-        # Avatar flush to the left interior — covers the rounded cap and any
-        # glyph that started inside it.
+        # Avatar — left edges of all three pills share a common x so the
+        # avatars line up vertically even though the gold pill is indented
+        # right in the template.
         av_d = int(pill_h * 0.62)
-        av_x = px0 + int(pill_h * 0.06)
+        av_x = _PILL_AVATAR_LEFT
         av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
         # Level tag, right-aligned inside the pill (before the right cap).
-        level_size = {1: 48, 2: 38, 3: 34}[rank]
+        level_size = {1: 50, 2: 40, 3: 34}[rank]
         level_img = _slanted_text(
-            f"Lv {entry.level}", _fonts.sans(level_size, weight=720), PILL_LEVEL
+            f"Lv {entry.level}", _fonts.sans(level_size, weight=800), PILL_LEVEL
         )
         level_right = px1 - pill_h // 2 + int(pill_h * 0.10)
         _paste_right_v_centre(canvas, level_img, level_right, cy)
 
-        # Name fills the space between avatar and the level tag.
-        name_x = av_x + av_d + int(pill_h * 0.10)
+        # Name fills the space between avatar and the level tag. Sizes step
+        # down 1st > 2nd > 3rd to reinforce the podium hierarchy.
+        name_x = av_x + av_d + int(pill_h * 0.12)
         name_max = (level_right - level_img.width - 20) - name_x
-        max_size = {1: 92, 2: 70, 3: 62}[rank]
+        max_size = {1: 116, 2: 88, 3: 70}[rank]
         name = _fit_name(
             entry.display_name,
             PILL_TEXT,
             max_w=max(name_max, 40),
             max_size=max_size,
-            min_size=28,
-            weight=780,
+            min_size=30,
+            weight=800,
         )
         _paste_v_centre(canvas, name, name_x, cy)
 
