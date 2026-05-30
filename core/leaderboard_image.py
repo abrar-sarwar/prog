@@ -64,7 +64,8 @@ PILL_ORDINAL = (255, 255, 255)
 # start at the very left edge and run right. All avatars share one x so they
 # line up; the rank label sits in the faded gutter to the left of the avatar.
 PILL_X0 = 0                # bars begin at the canvas left edge and fade in
-PILL_AVATAR_X = 150        # shared left x of every podium avatar
+PILL_AVATAR_X = 188        # shared left x of every podium avatar (clears the
+#                            left-aligned rank label + a gap)
 PILL_RANK_X = LEFT_MARGIN  # left edge of the rank label (aligns with title)
 PILL_MAX_RIGHT = CANVAS_W - 44   # 1st (above the column) may reach here
 _SIDE_GAP = 28             # 2nd/3rd must stop this far short of the column
