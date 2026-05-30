@@ -52,7 +52,8 @@ _PILLS = {
 # word sits in a measured y-band. Erase samples from the inter-row gaps.
 _SIDE_X0 = 794
 _SIDE_X1 = 974
-# (rank: (band_y0, band_y1)) measured from the template.
+# (rank: (band_y0, band_y1)) measured from the template — the white glyph
+# extent of each placeholder word.
 _SIDE_BANDS = {
     4: (627, 654),
     5: (690, 717),
@@ -61,6 +62,18 @@ _SIDE_BANDS = {
     8: (880, 913),
     9: (944, 970),
     10: (1006, 1032),
+}
+# Guaranteed glyph-free sample rows (the gaps above/below each word band)
+# used to rebuild the panel colour when erasing. Picked from the measured
+# inter-row gaps so no sample ever lands on lettering.
+_SIDE_SAMPLES = {
+    4: (618, 672),
+    5: (672, 737),
+    6: (737, 801),
+    7: (801, 863),
+    8: (863, 928),
+    9: (928, 988),
+    10: (988, 1040),
 }
 
 # Text colours.
@@ -244,6 +257,8 @@ def _erase_band(
     y1: int,
     above_y: int,
     below_y: int,
+    *,
+    skip_bg: bool = True,
 ) -> None:
     """Cover a placeholder word by rebuilding the art beneath it.
 
@@ -251,15 +266,19 @@ def _erase_band(
     constant down any single column, so for each column ``x`` we copy a
     clean sample colour down through the glyph band. We try ``above_y``
     first, falling back to ``below_y`` when the upper sample lands on the
-    dark background (which happens in the pills' rounded caps). Columns
-    where both samples are background are left untouched — there's no pill
-    there to rebuild.
+    dark background.
+
+    ``skip_bg`` (default) leaves columns where both samples are background
+    untouched — correct for the pills, whose rounded caps shouldn't be
+    squared off. The rectangular side panel passes ``skip_bg=False`` so its
+    genuinely-dark left edge is copied too (otherwise the left half of each
+    word survives).
     """
     px = canvas.load()
     for x in range(x0, x1):
         ca = px[x, above_y]
         src = ca if not _is_bg(ca) else px[x, below_y]
-        if _is_bg(src):
+        if skip_bg and _is_bg(src):
             continue
         for y in range(y0, y1):
             px[x, y] = src
@@ -332,9 +351,10 @@ class _Renderer:
             bx0, by0, bx1, by1 = slot["band"]
             _erase_band(canvas, bx0, by0, bx1, by1, slot["above"], slot["below"])
         for rank, (by0, by1) in _SIDE_BANDS.items():
+            s_above, s_below = _SIDE_SAMPLES[rank]
             _erase_band(
-                canvas, _SIDE_X0, by0 - 4, _SIDE_X1, by1 + 4,
-                by0 - 10, by1 + 10,
+                canvas, _SIDE_X0, by0 - 8, _SIDE_X1, by1 + 8,
+                s_above, s_below, skip_bg=False,
             )
 
         for rank in (1, 2, 3):
