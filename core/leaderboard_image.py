@@ -41,10 +41,12 @@ CANVAS_H = 1080
 # Faux-italic shear applied to all text (matches the design's oblique).
 SLANT = 0.20
 
-# Masthead.
+# Masthead. LEFT_MARGIN is the shared left edge for the title and the podium
+# rank labels, giving a strong vertical alignment line down the left.
+LEFT_MARGIN = 60
 TITLE_TEXT = "leaderboard"
-TITLE_SIZE = 96
-TITLE_POS = (60, 56)
+TITLE_SIZE = 120
+TITLE_POS = (LEFT_MARGIN, 44)
 
 # Background gradient endpoints (top -> bottom) + shared text colours.
 BG_TOP = (14, 7, 23)
@@ -63,23 +65,39 @@ PILL_ORDINAL = (255, 255, 255)
 # line up; the rank label sits in the faded gutter to the left of the avatar.
 PILL_X0 = 0                # bars begin at the canvas left edge and fade in
 PILL_AVATAR_X = 150        # shared left x of every podium avatar
+PILL_RANK_X = LEFT_MARGIN  # left edge of the rank label (aligns with title)
 PILL_MAX_RIGHT = CANVAS_W - 44   # 1st (above the column) may reach here
 _SIDE_GAP = 28             # 2nd/3rd must stop this far short of the column
 
-# Per-rank vertical placement + sizing. Heights descend 1st > 2nd > 3rd.
-# ``min_w`` keeps short-name pills from looking stubby; the pill grows past
-# it to fit longer names. Bumped bigger per request.
+# Vertical layout is derived from ONE constant gap so the three pills sit in
+# an even rhythm (the eye measures the gap between pills, so it must be
+# constant even though the heights descend).
+_PODIUM_TOP = 208          # y of the 1st pill's top
+_PODIUM_GAP = 30           # constant vertical gap between pills
+
+# Per-rank sizing. Heights descend 1st > 2nd > 3rd. Font sizes are kept
+# proportional to the name (rank = 0.50*name, level = 0.30*name) so the
+# three rows read as one design at three scales. ``min_w`` keeps short-name
+# pills from looking stubby; the pill grows past it to fit longer names.
 _PODIUM = {
-    1: {"y_top": 240, "height": 224, "name_size": 150, "rank_size": 80,
-        "level_size": 46, "min_w": 660,
+    1: {"height": 224, "name_size": 150, "rank_size": 75,
+        "level_size": 45, "min_w": 660,
         "grad": ((58, 42, 28), (255, 201, 92))},      # gold
-    2: {"y_top": 492, "height": 192, "name_size": 118, "rank_size": 70,
-        "level_size": 38, "min_w": 560,
+    2: {"height": 192, "name_size": 118, "rank_size": 59,
+        "level_size": 35, "min_w": 560,
         "grad": ((40, 27, 58), (140, 83, 240))},      # indigo
-    3: {"y_top": 710, "height": 172, "name_size": 92, "rank_size": 62,
-        "level_size": 34, "min_w": 520,
+    3: {"height": 172, "name_size": 92, "rank_size": 46,
+        "level_size": 28, "min_w": 520,
         "grad": ((58, 44, 76), (176, 141, 230))},     # lighter violet
 }
+
+
+def _podium_y_top(rank: int) -> int:
+    """Top y of a pill, derived from a constant inter-pill gap."""
+    y = _PODIUM_TOP
+    for r in range(1, rank):
+        y += _PODIUM[r]["height"] + _PODIUM_GAP
+    return y
 
 # Avatar ring tint per rank.
 _PILL_RING = {1: (150, 96, 24), 2: (54, 38, 120), 3: (74, 54, 140)}
@@ -87,9 +105,9 @@ _PILL_RING = {1: (150, 96, 24), 2: (54, 38, 120), 3: (74, 54, 140)}
 # --- Side column (ranks 4-10) ---------------------------------------------
 SIDE_X0 = 690
 SIDE_X1 = CANVAS_W - 36
-SIDE_Y0 = 480            # aligns with the 2nd pill's top
+SIDE_Y0 = _podium_y_top(2)   # top aligns with the 2nd pill
 SIDE_Y1 = CANVAS_H - 40
-SIDE_ROW_GAP = 12        # vertical gap between row pills
+SIDE_ROW_GAP = 16        # vertical gap between row pills (was 12; too tight)
 SIDE_FILL = (104, 84, 188, 235)
 SIDE_EMPTY_FILL = (70, 58, 120, 150)    # dimmer fill for empty slots
 SIDE_HIGHLIGHT = (255, 255, 255, 70)
@@ -98,7 +116,7 @@ SIDE_EMPTY_TEXT = (150, 140, 185)       # dim rank label on empty slots
 SIDE_LEVEL = (214, 203, 244)
 SIDE_ORDINAL = (208, 196, 240)
 SIDE_NAME_SIZE = 30      # bigger than before; shrinks to fit if needed
-SIDE_RANK_SIZE = 28
+SIDE_RANK_SIZE = 22      # was 28 — rank shouldn't rival the name
 
 ACCENT_HIGHLIGHT = (255, 255, 255)
 
@@ -163,15 +181,25 @@ def _slanted_text(
     fill: tuple[int, int, int],
     slant: float = SLANT,
 ) -> Image.Image:
-    """Render ``text`` and shear it so the top leans right (faux italic)."""
+    """Render ``text`` sheared to the right (faux italic).
+
+    The image height is the font's full cell (ascent+descent), NOT the
+    inked bounding box, and only the *horizontal* extent is cropped. That
+    means every string at a given size has the same height and the same
+    internal baseline, so vertical-centering different names (with/without
+    ascenders or descenders) and aligning name-vs-level baselines both
+    work consistently — fixing names that otherwise rode low."""
+    ascent, descent = font.getmetrics()
+    cell_h = ascent + descent
     tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     bbox = tmp.textbbox((0, 0), text, font=font)
     tw = max(bbox[2] - bbox[0], 1)
-    th = max(bbox[3] - bbox[1], 1)
     pad = 8
-    base = Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
+    base = Image.new("RGBA", (tw + pad * 2, cell_h), (0, 0, 0, 0))
+    # Draw at the natural baseline (y=0 top => baseline at ``ascent``); only
+    # nudge x so the ink starts at ``pad``.
     ImageDraw.Draw(base).text(
-        (pad - bbox[0], pad - bbox[1]), text, font=font, fill=fill + (255,)
+        (pad - bbox[0], 0), text, font=font, fill=fill + (255,)
     )
     h = base.height
     extra = int(abs(slant) * h) + 1
@@ -181,7 +209,12 @@ def _slanted_text(
         (1, slant, -slant * h, 0, 1, 0),
         resample=Image.BICUBIC,
     )
-    return sheared.crop(sheared.getbbox() or (0, 0, 1, 1))
+    # Crop horizontally only; keep the full vertical cell for consistent
+    # centering.
+    alpha_bbox = sheared.split()[-1].getbbox()
+    if alpha_bbox:
+        sheared = sheared.crop((alpha_bbox[0], 0, alpha_bbox[2], sheared.height))
+    return sheared
 
 
 def _fit_name(
@@ -454,13 +487,16 @@ class _Renderer:
 
     def _draw_server_icon(self, canvas: Image.Image) -> None:
         d = 96
+        # Vertically centre the icon on the masthead's optical centre so the
+        # top bar reads as one aligned row.
+        title_cy = TITLE_POS[1] + int(TITLE_SIZE * 0.42)
         icon = _avatar_with_ring(self.guild_icon_bytes, d, (120, 100, 180))
-        canvas.paste(icon, (CANVAS_W - 56 - d, 92 - d // 2), icon)
+        canvas.paste(icon, (CANVAS_W - 56 - d, title_cy - d // 2), icon)
 
     # -- podium pills ----------------------------------------------------
     def _draw_pill(self, canvas: Image.Image, rank: int, entry: LeaderboardEntry) -> None:
         cfg = _PODIUM[rank]
-        y_top = cfg["y_top"]
+        y_top = _podium_y_top(rank)
         h = cfg["height"]
         cy = y_top + h // 2
 
@@ -514,11 +550,12 @@ class _Renderer:
             glow.putalpha(glow.getchannel("A").point(lambda a: a // 5))
             canvas.paste(glow, (PILL_X0, y_top), glow)
 
-        # Rank label in the far-left gutter, before the avatar.
+        # Rank label, LEFT-aligned at the shared left margin (same x as the
+        # masthead), so title + "1st/2nd/3rd" form one vertical edge.
         ord_img = _slanted_text(
             _ordinal(rank), _fonts.sans(cfg["rank_size"], weight=800), PILL_ORDINAL
         )
-        _paste_right_v_centre(canvas, ord_img, av_x - 16, cy)
+        _paste_v_centre(canvas, ord_img, PILL_RANK_X, cy)
 
         # Avatar.
         av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
@@ -536,6 +573,16 @@ class _Renderer:
         # Seven fixed slots (ranks 4-10). Empty slots still get a bubble.
         slot_h = (total_h - SIDE_ROW_GAP * 6) // 7
         row_h = slot_h
+
+        # Fixed interior columns so every row's avatar/name/level start at
+        # the SAME x regardless of rank-label width ("10th" is wider than
+        # "4th"). The rank is right-aligned within a gutter sized for "10th".
+        rank_gutter = _measure("10th", SIDE_RANK_SIZE)
+        ord_right_x = SIDE_X0 + 16 + rank_gutter
+        av_d = row_h - 14
+        col_av_x = ord_right_x + 14
+        col_name_x = col_av_x + av_d + 12
+        level_right = SIDE_X1 - 16
 
         for i, rank in enumerate(range(4, 11)):
             entry = self.by_rank.get(rank)
