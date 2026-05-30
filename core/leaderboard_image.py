@@ -385,8 +385,12 @@ def _draw_background(w: int, h: int) -> Image.Image:
     try:
         tpl = Image.open(_TEMPLATE_PATH).convert("RGB")
         th = tpl.height
-        # Average every row down to a single column (kills horizontal noise).
-        col = tpl.resize((1, th), Image.BOX)
+        # Sample the template's far-LEFT edge column — pure aubergine
+        # background, no pills/side-panel contamination. It carries the
+        # original top->bottom colour but also film grain, so blur it
+        # vertically hard to get a smooth gradient (no horizontal streaks).
+        col = tpl.crop((1, 0, 9, th)).resize((1, th), Image.BOX)
+        col = col.filter(ImageFilter.GaussianBlur(24))
         bg = col.resize((w, h), Image.BILINEAR).convert("RGBA")
     except Exception:
         bg = make_atmospheric_background(w, h, orbs=[])
