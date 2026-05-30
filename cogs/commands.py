@@ -211,8 +211,9 @@ class UserCommands(commands.Cog):
                 avatar_bytes=avatar_bytes,
             )
 
-        entries = await asyncio.gather(
-            *(_entry(i, row) for i, row in enumerate(rows))
+        guild_icon_bytes, *entries = await asyncio.gather(
+            _read_guild_icon(guild),
+            *(_entry(i, row) for i, row in enumerate(rows)),
         )
 
         # Highlight the invoker only when they actually appear on the board.

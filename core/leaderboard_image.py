@@ -249,6 +249,23 @@ def _is_bg(c) -> bool:
     return (c[0] + c[1] + c[2]) < 95
 
 
+def _median_sample(px, x: int, y: int, span: int = 5):
+    """Median RGB of a short vertical run centred on ``(x, y)``.
+
+    Taking a median over a few rows (rather than copying one pixel) avoids
+    propagating a single noisy/edge pixel into a visible vertical streak
+    when we fill the glyph band below.
+    """
+    rs, gs, bs = [], [], []
+    half = span // 2
+    for dy in range(-half, half + 1):
+        c = px[x, y + dy]
+        rs.append(c[0]); gs.append(c[1]); bs.append(c[2])
+    rs.sort(); gs.sort(); bs.sort()
+    m = len(rs) // 2
+    return (rs[m], gs[m], bs[m])
+
+
 def _erase_band(
     canvas: Image.Image,
     x0: int,
@@ -263,21 +280,23 @@ def _erase_band(
     """Cover a placeholder word by rebuilding the art beneath it.
 
     The pill gradient/fade and the side-panel violet are essentially
-    constant down any single column, so for each column ``x`` we copy a
-    clean sample colour down through the glyph band. We try ``above_y``
-    first, falling back to ``below_y`` when the upper sample lands on the
-    dark background.
+    constant down any single column, so for each column ``x`` we fill the
+    glyph band with a clean per-column colour. The colour is the median of
+    a short vertical run at ``above_y`` (falling back to ``below_y`` when
+    the upper sample lands on the dark background, e.g. a pill's rounded
+    cap), which prevents single stray pixels from becoming vertical lines.
 
     ``skip_bg`` (default) leaves columns where both samples are background
     untouched — correct for the pills, whose rounded caps shouldn't be
     squared off. The rectangular side panel passes ``skip_bg=False`` so its
-    genuinely-dark left edge is copied too (otherwise the left half of each
-    word survives).
+    genuinely-dark left edge is rebuilt too (otherwise the left half of
+    each word survives).
     """
     px = canvas.load()
     for x in range(x0, x1):
-        ca = px[x, above_y]
-        src = ca if not _is_bg(ca) else px[x, below_y]
+        src = _median_sample(px, x, above_y)
+        if _is_bg(src):
+            src = _median_sample(px, x, below_y)
         if skip_bg and _is_bg(src):
             continue
         for y in range(y0, y1):
@@ -327,7 +346,11 @@ def render_png(
     rendered_at=None,
     highlight_rank: int | None = None,
 ) -> bytes:
-    return _Renderer(entries=entries, highlight_rank=highlight_rank).render()
+    return _Renderer(
+        entries=entries,
+        highlight_rank=highlight_rank,
+        guild_icon_bytes=guild_icon_bytes,
+    ).render()
 
 
 class _Renderer:
@@ -336,9 +359,11 @@ class _Renderer:
         *,
         entries: list[LeaderboardEntry],
         highlight_rank: int | None,
+        guild_icon_bytes: bytes | None = None,
     ) -> None:
         self.by_rank = {e.rank: e for e in entries}
         self.highlight_rank = highlight_rank
+        self.guild_icon_bytes = guild_icon_bytes
 
     def render(self) -> bytes:
         canvas = Image.open(_TEMPLATE_PATH).convert("RGB")
@@ -357,6 +382,9 @@ class _Renderer:
                 s_above, s_below, skip_bg=False,
             )
 
+        if self.guild_icon_bytes is not None:
+            self._draw_server_icon(canvas)
+
         for rank in (1, 2, 3):
             entry = self.by_rank.get(rank)
             if entry is not None:
@@ -370,6 +398,15 @@ class _Renderer:
         buf = io.BytesIO()
         canvas.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
+
+    # -- server icon (top-right) -----------------------------------------
+    def _draw_server_icon(self, canvas: Image.Image) -> None:
+        """Circular server icon in the top-right, aligned with the masthead."""
+        d = 96
+        cx_right = canvas.width - 56
+        cy = 92
+        icon = _avatar_with_ring(self.guild_icon_bytes, d, (120, 100, 180))
+        canvas.paste(icon, (cx_right - d, cy - d // 2), icon)
 
     # -- podium pills (1-3) ----------------------------------------------
     def _draw_pill(self, canvas: Image.Image, rank: int, entry: LeaderboardEntry) -> None:
