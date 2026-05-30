@@ -21,12 +21,16 @@ import io
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 _FONTS_DIR = _ASSETS_DIR / "fonts"
 _FONT_SANS_PATH = _FONTS_DIR / "BricolageGrotesque-VariableFont.ttf"
 _FONT_SERIF_PATH = _FONTS_DIR / "Fraunces-VariableFont.ttf"
+# The original design — used only for its background (a clean full-height
+# strip from the right edge is stretched across the canvas, so none of the
+# template's own pills/text bleed through).
+_TEMPLATE_PATH = _ASSETS_DIR / "leaderboard_template.png"
 
 # ---------------------------------------------------------------------------
 # Canvas + global tunables
@@ -54,29 +58,27 @@ PILL_LEVEL = (255, 255, 255)
 PILL_ORDINAL = (255, 255, 255)
 
 # --- Podium pills (ranks 1-3) ---------------------------------------------
-# All pills start at this x (stacked, left-aligned). The rank label lives in
-# the gutter to the LEFT of this, so the pill body starts after the gutter.
-PILL_RANK_GUTTER = 96     # width reserved at the far left for "1st"/"2nd"/…
-PILL_LEFT = PILL_RANK_GUTTER + 24   # x where the capsule body begins
-# Per-rank right limit. 1st sits ABOVE the side column so it can run nearly
-# full width; 2nd/3rd are level with the column, so they must stop short of
-# it (SIDE_X0 - gap) to avoid overlapping.
-PILL_MAX_RIGHT = CANVAS_W - 48
-_SIDE_GAP = 28
+# Pills are "open" bars that fade out on the LEFT (sliding-in look), so they
+# start at the very left edge and run right. All avatars share one x so they
+# line up; the rank label sits in the faded gutter to the left of the avatar.
+PILL_X0 = 0                # bars begin at the canvas left edge and fade in
+PILL_AVATAR_X = 150        # shared left x of every podium avatar
+PILL_MAX_RIGHT = CANVAS_W - 44   # 1st (above the column) may reach here
+_SIDE_GAP = 28             # 2nd/3rd must stop this far short of the column
 
 # Per-rank vertical placement + sizing. Heights descend 1st > 2nd > 3rd.
 # ``min_w`` keeps short-name pills from looking stubby; the pill grows past
-# it to fit longer names, capped at PILL_MAX_RIGHT.
+# it to fit longer names. Bumped bigger per request.
 _PODIUM = {
-    1: {"y_top": 232, "height": 204, "name_size": 104, "rank_size": 72,
-        "level_size": 44, "min_w": 560,
-        "grad": ((60, 44, 30), (255, 201, 92))},      # gold
-    2: {"y_top": 470, "height": 168, "name_size": 84, "rank_size": 62,
-        "level_size": 36, "min_w": 470,
-        "grad": ((42, 29, 60), (140, 83, 240))},      # indigo
-    3: {"y_top": 668, "height": 150, "name_size": 72, "rank_size": 56,
-        "level_size": 32, "min_w": 430,
-        "grad": ((60, 46, 78), (176, 141, 230))},     # lighter violet
+    1: {"y_top": 226, "height": 224, "name_size": 112, "rank_size": 80,
+        "level_size": 46, "min_w": 660,
+        "grad": ((58, 42, 28), (255, 201, 92))},      # gold
+    2: {"y_top": 480, "height": 192, "name_size": 92, "rank_size": 70,
+        "level_size": 38, "min_w": 560,
+        "grad": ((40, 27, 58), (140, 83, 240))},      # indigo
+    3: {"y_top": 702, "height": 172, "name_size": 80, "rank_size": 62,
+        "level_size": 34, "min_w": 520,
+        "grad": ((58, 44, 76), (176, 141, 230))},     # lighter violet
 }
 
 # Avatar ring tint per rank.
@@ -286,6 +288,49 @@ def _h_gradient_capsule(
     return pill
 
 
+def _fade_left_capsule(
+    w: int,
+    h: int,
+    left: tuple[int, int, int],
+    right: tuple[int, int, int],
+    fade_w: int,
+) -> Image.Image:
+    """A bar with a rounded RIGHT cap whose LEFT side fades out to nothing.
+
+    The colour runs left->right (dark to bright) and the alpha ramps from 0
+    at the far left up to fully opaque by ``fade_w``, so the pill reads as
+    if it's sliding in from off-screen rather than a closed capsule.
+    """
+    # Horizontal colour gradient.
+    row = Image.new("RGB", (w, 1))
+    rpx = row.load()
+    for x in range(w):
+        t = x / max(w - 1, 1)
+        rpx[x, 0] = (
+            int(left[0] + (right[0] - left[0]) * t),
+            int(left[1] + (right[1] - left[1]) * t),
+            int(left[2] + (right[2] - left[2]) * t),
+        )
+    pill = row.resize((w, h)).convert("RGBA")
+
+    # Shape mask: round only the RIGHT corners; the left edge is square so
+    # it can fade straight off rather than curving back in.
+    shape = Image.new("L", (w, h), 0)
+    sd = ImageDraw.Draw(shape)
+    sd.rounded_rectangle((0, 0, w - 1, h - 1), radius=h // 2, fill=255)
+    sd.rectangle((0, 0, h // 2, h - 1), fill=255)
+
+    # Horizontal alpha ramp: 0 -> 255 across ``fade_w``.
+    ramp_row = Image.new("L", (w, 1), 255)
+    rp = ramp_row.load()
+    for x in range(min(fade_w, w)):
+        rp[x, 0] = int(255 * (x / max(fade_w, 1)))
+    ramp = ramp_row.resize((w, h))
+
+    pill.putalpha(ImageChops.multiply(shape, ramp))
+    return pill
+
+
 # ---------------------------------------------------------------------------
 # Background (shared with rank_image)
 # ---------------------------------------------------------------------------
@@ -318,16 +363,32 @@ def make_atmospheric_background(
     return base
 
 
+_BG_CACHE: dict[tuple[int, int], Image.Image] = {}
+
+
 def _draw_background(w: int, h: int) -> Image.Image:
-    return make_atmospheric_background(
-        w,
-        h,
-        orbs=[
-            (int(w * 0.05), int(h * 0.10), int(w * 0.40), (120, 90, 200), 46, 150),
-            (int(w * 0.95), int(h * 0.30), int(w * 0.42), (210, 150, 90), 34, 170),
-            (int(w * 0.55), int(h * 1.0), int(w * 0.55), (90, 60, 160), 40, 180),
-        ],
-    )
+    """The original design's background, restored.
+
+    We take a clean full-height strip from the right edge of the template
+    (past all of its pills and the side column) and stretch it across the
+    whole canvas. That reproduces the exact aubergine gradient + subtle
+    grain of the original art without dragging in any of its baked-in
+    pills or text. Falls back to a plain gradient if the asset is missing.
+    """
+    cached = _BG_CACHE.get((w, h))
+    if cached is not None:
+        return cached.copy()
+    try:
+        tpl = Image.open(_TEMPLATE_PATH).convert("RGB")
+        tw, th = tpl.size
+        # A clean vertical strip near the right edge (template side column
+        # ends well before this), scaled to fill the canvas.
+        strip = tpl.crop((tw - 60, 0, tw - 6, th))
+        bg = strip.resize((w, h), Image.LANCZOS).convert("RGBA")
+    except Exception:
+        bg = make_atmospheric_background(w, h, orbs=[])
+    _BG_CACHE[(w, h)] = bg
+    return bg.copy()
 
 
 # ---------------------------------------------------------------------------
@@ -371,9 +432,9 @@ class _Renderer:
             if entry is not None:
                 self._draw_pill(canvas, rank, entry)
 
-        side = [self.by_rank[r] for r in range(4, 11) if r in self.by_rank]
-        if side:
-            self._draw_side_panel(canvas, side)
+        # Always lay out all seven 4-10 slots; empty ones show an empty
+        # bubble with just the rank, so the column always looks complete.
+        self._draw_side_panel(canvas)
 
         buf = io.BytesIO()
         canvas.convert("RGB").save(buf, format="PNG", optimize=True)
@@ -395,111 +456,118 @@ class _Renderer:
         y_top = cfg["y_top"]
         h = cfg["height"]
         cy = y_top + h // 2
-        radius = h // 2
 
-        # Interior layout metrics (avatar + paddings) are fixed; the name
-        # font is chosen so the whole capsule fits within PILL_MAX_RIGHT.
-        av_d = int(h * 0.62)
-        pad_l = int(h * 0.10)         # gap from capsule left edge to avatar
+        av_d = int(h * 0.60)
+        av_x = PILL_AVATAR_X
         gap_av_name = int(h * 0.12)   # avatar -> name
         gap_name_lvl = int(h * 0.16)  # name -> level
-        pad_r = radius                # keep level clear of the right cap
+        pad_r = h // 2                # keep level clear of the rounded cap
 
         level_img = _slanted_text(
             f"Lv {entry.level}", _fonts.sans(cfg["level_size"], weight=800), PILL_LEVEL
         )
 
-        # 1st place sits above the side column, so it can run nearly the full
-        # canvas width. 2nd/3rd are level with the column and must stop short
-        # of it to avoid overlapping.
+        # 1st sits above the side column and may run nearly full width;
+        # 2nd/3rd are level with the column so they stop short of it.
         max_right = PILL_MAX_RIGHT if rank == 1 else (SIDE_X0 - _SIDE_GAP)
 
-        # Fixed (non-name) interior width.
-        fixed = (
-            pad_l + av_d + gap_av_name + gap_name_lvl + level_img.width + pad_r
-        )
-        body_x = PILL_LEFT
-        max_name_w = max_right - body_x - fixed
-
+        # The bar spans from the canvas left edge to ``pill_right``; the name
+        # slot lies between the avatar and the level tag, so the bar's right
+        # end grows to fit the (full) name.
+        name_left = av_x + av_d + gap_av_name
+        max_name_w = max_right - name_left - gap_name_lvl - level_img.width - pad_r
         name_img = _fit_name(
             entry.display_name,
             PILL_TEXT,
             max_w=max(max_name_w, 60),
-            # Low floor so even a very long name shrinks to fit IN FULL
-            # rather than being truncated with an ellipsis.
+            # Low floor so even a very long name shrinks to fit IN FULL.
             max_size=cfg["name_size"],
             min_size=15,
             weight=800,
         )
 
-        # Capsule width grows to fit the name, clamped to [min_w, max].
-        content_w = fixed + name_img.width
-        pill_w = max(cfg["min_w"], content_w)
-        pill_w = min(pill_w, max_right - body_x)
+        content_right = (
+            name_left + name_img.width + gap_name_lvl + level_img.width + pad_r
+        )
+        pill_right = max(cfg["min_w"], content_right)
+        pill_right = min(pill_right, max_right)
+        pill_w = pill_right - PILL_X0
 
-        # Draw the capsule.
-        pill = _h_gradient_capsule(pill_w, h, cfg["grad"][0], cfg["grad"][1])
-        canvas.paste(pill, (body_x, y_top), pill)
+        # Fade-left bar (open on the left, rounded cap on the right). The fade
+        # runs out roughly where the avatar begins, so the rank label to its
+        # left reads against the dark background.
+        fade_w = av_x
+        pill = _fade_left_capsule(pill_w, h, cfg["grad"][0], cfg["grad"][1], fade_w)
+        canvas.paste(pill, (PILL_X0, y_top), pill)
 
         if self.highlight_rank == rank:
-            ring = Image.new("RGBA", (pill_w, h), (0, 0, 0, 0))
-            ImageDraw.Draw(ring).rounded_rectangle(
-                (2, 2, pill_w - 3, h - 3), radius=radius - 2,
-                outline=ACCENT_HIGHLIGHT + (235,), width=5,
+            glow = _fade_left_capsule(
+                pill_w, h, (255, 255, 255), (255, 255, 255), fade_w
             )
-            canvas.paste(ring, (body_x, y_top), ring)
+            glow.putalpha(glow.getchannel("A").point(lambda a: a // 5))
+            canvas.paste(glow, (PILL_X0, y_top), glow)
 
-        # Rank label in the far-left gutter (before the capsule/avatar).
+        # Rank label in the far-left gutter, before the avatar.
         ord_img = _slanted_text(
             _ordinal(rank), _fonts.sans(cfg["rank_size"], weight=800), PILL_ORDINAL
         )
-        _paste_right_v_centre(canvas, ord_img, PILL_LEFT - 14, cy)
+        _paste_right_v_centre(canvas, ord_img, av_x - 16, cy)
 
         # Avatar.
-        av_x = body_x + pad_l
         av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
         # Name.
-        name_x = av_x + av_d + gap_av_name
-        _paste_v_centre(canvas, name_img, name_x, cy)
+        _paste_v_centre(canvas, name_img, name_left, cy)
 
-        # Level, right-aligned inside the capsule.
-        _paste_right_v_centre(canvas, level_img, body_x + pill_w - pad_r, cy)
+        # Level, right-aligned inside the bar.
+        _paste_right_v_centre(canvas, level_img, pill_right - pad_r, cy)
 
     # -- side column (4-10) ----------------------------------------------
-    def _draw_side_panel(self, canvas: Image.Image, side: list[LeaderboardEntry]) -> None:
-        n = len(side)
+    def _draw_side_panel(self, canvas: Image.Image) -> None:
         total_h = SIDE_Y1 - SIDE_Y0
-        # 7 logical slots so rows keep their size whether 7 or fewer show.
+        # Seven fixed slots (ranks 4-10). Empty slots still get a bubble.
         slot_h = (total_h - SIDE_ROW_GAP * 6) // 7
         row_h = slot_h
 
-        for i, entry in enumerate(side):
+        for i, rank in enumerate(range(4, 11)):
+            entry = self.by_rank.get(rank)
             ry0 = SIDE_Y0 + i * (row_h + SIDE_ROW_GAP)
-            ry1 = ry0 + row_h
-            cy = (ry0 + ry1) // 2
-            highlighted = self.highlight_rank == entry.rank
+            cy = ry0 + row_h // 2
+            highlighted = entry is not None and self.highlight_rank == rank
 
-            # Row pill (rounded rect).
+            # Row bubble. Empty slots use a dimmer fill so they read as
+            # placeholders without disappearing.
+            if highlighted:
+                fill = SIDE_HIGHLIGHT
+            elif entry is not None:
+                fill = SIDE_FILL
+            else:
+                fill = SIDE_EMPTY_FILL
             pill = Image.new("RGBA", (SIDE_X1 - SIDE_X0, row_h), (0, 0, 0, 0))
             ImageDraw.Draw(pill).rounded_rectangle(
                 (0, 0, SIDE_X1 - SIDE_X0 - 1, row_h - 1),
                 radius=row_h // 2,
-                fill=SIDE_HIGHLIGHT if highlighted else SIDE_FILL,
+                fill=fill,
             )
             canvas.paste(pill, (SIDE_X0, ry0), pill)
 
-            # Rank label, far left.
+            # Rank label, far left (always shown).
             ord_img = _slanted_text(
-                _ordinal(entry.rank), _fonts.sans(SIDE_RANK_SIZE, weight=800), SIDE_ORDINAL
+                _ordinal(rank), _fonts.sans(SIDE_RANK_SIZE, weight=800),
+                SIDE_ORDINAL if entry is not None else SIDE_EMPTY_TEXT,
             )
-            ord_right = SIDE_X0 + 14 + ord_img.width
+            ord_right = SIDE_X0 + 16 + ord_img.width
             _paste_right_v_centre(canvas, ord_img, ord_right, cy)
 
-            # Avatar.
-            av_d = row_h - 16
-            av_x = ord_right + 10
+            av_d = row_h - 14
+            av_x = ord_right + 12
+            if entry is None:
+                # Empty slot: an outlined empty circle, nothing else.
+                ph = _circle_placeholder(av_d, (96, 80, 140))
+                canvas.paste(ph, (av_x, cy - av_d // 2), ph)
+                continue
+
             av = _avatar_with_ring(entry.avatar_bytes, av_d, (70, 50, 140))
             canvas.paste(av, (av_x, cy - av_d // 2), av)
 
@@ -507,17 +575,16 @@ class _Renderer:
             level_img = _slanted_text(
                 f"Lv {entry.level}", _fonts.sans(SIDE_RANK_SIZE - 4, weight=800), SIDE_LEVEL
             )
-            level_right = SIDE_X1 - 14
+            level_right = SIDE_X1 - 16
             _paste_right_v_centre(canvas, level_img, level_right, cy)
 
-            # Name between avatar and level.
-            name_x = av_x + av_d + 10
-            name_max = (level_right - level_img.width - 10) - name_x
+            # Name between avatar and level — always shown in full.
+            name_x = av_x + av_d + 12
+            name_max = (level_right - level_img.width - 12) - name_x
             name_img = _fit_name(
                 entry.display_name,
                 SIDE_TEXT,
                 max_w=max(name_max, 24),
-                # Low floor so long names shrink to fit fully, never "S…".
                 max_size=SIDE_NAME_SIZE,
                 min_size=8,
                 weight=760,
