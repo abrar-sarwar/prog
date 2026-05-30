@@ -303,6 +303,51 @@ def _erase_band(
             px[x, y] = src
 
 
+def _remove_vlines(canvas: Image.Image, x0: int, y0: int, x1: int, y1: int) -> None:
+    """Erase thin dark *decorative* vertical lines inside a pill region.
+
+    The template art carries a faint accent line down each pill. We find
+    columns markedly darker than their neighbours 8px away (where both
+    neighbours are clearly pill-coloured, so the rounded caps and the
+    fade-to-black edges are left alone), then replace each flagged column
+    by horizontally interpolating between the nearest clean columns on
+    either side — which preserves the gradient.
+    """
+    px = canvas.load()
+    h = y1 - y0
+
+    def col_lum(x: int) -> int:
+        return sum(sum(px[x, y]) for y in range(y0, y1)) // h
+
+    flagged: list[int] = []
+    for x in range(x0 + 8, x1 - 8):
+        c = col_lum(x)
+        ln, lr = col_lum(x - 8), col_lum(x + 8)
+        if c < ln - 28 and c < lr - 28 and ln > 200 and lr > 200:
+            flagged.append(x)
+    if not flagged:
+        return
+
+    flset = set(flagged)
+    for x in flagged:
+        # Nearest clean columns to the left and right of this line.
+        lx = x - 1
+        while lx in flset and lx > x0:
+            lx -= 1
+        rx = x + 1
+        while rx in flset and rx < x1 - 1:
+            rx += 1
+        span = max(rx - lx, 1)
+        t = (x - lx) / span
+        for y in range(y0, y1):
+            cl, cr = px[lx, y], px[rx, y]
+            px[x, y] = (
+                int(cl[0] + (cr[0] - cl[0]) * t),
+                int(cl[1] + (cr[1] - cl[1]) * t),
+                int(cl[2] + (cr[2] - cl[2]) * t),
+            )
+
+
 # ---------------------------------------------------------------------------
 # Background (shared with rank_image)
 # ---------------------------------------------------------------------------
@@ -375,6 +420,9 @@ class _Renderer:
             slot = _PILLS[rank]
             bx0, by0, bx1, by1 = slot["band"]
             _erase_band(canvas, bx0, by0, bx1, by1, slot["above"], slot["below"])
+            # Remove the template's decorative accent line inside the pill.
+            px0, py0, px1, py1 = slot["pill"]
+            _remove_vlines(canvas, px0 + 30, py0 + 24, px1 - 30, py1 - 24)
         for rank, (by0, by1) in _SIDE_BANDS.items():
             s_above, s_below = _SIDE_SAMPLES[rank]
             _erase_band(
