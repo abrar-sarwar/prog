@@ -326,27 +326,31 @@ def _erase_band(
 def _remove_vlines(canvas: Image.Image, x0: int, y0: int, x1: int, y1: int) -> None:
     """Erase thin dark *decorative* vertical lines inside a pill region.
 
-    The template art carries a faint accent line down each pill. We find
-    columns markedly darker than their neighbours 8px away (where both
-    neighbours are clearly pill-coloured, so the rounded caps and the
-    fade-to-black edges are left alone), then replace each flagged column
-    by horizontally interpolating between the nearest clean columns on
-    either side — which preserves the gradient.
+    The template art carries faint accent lines down each pill (including
+    a couple near the right cap). Detection samples a thin band around the
+    vertical centre — where the capsule is full width, so the rounded caps
+    never pollute the average — and flags columns markedly darker than
+    their neighbours 6px away (both neighbours clearly pill-coloured, so
+    the background and fade edges are left alone). Flagged columns are
+    rebuilt by interpolating the nearest clean columns, preserving the
+    gradient. The y-fill still spans the full ``y0..y1`` so the whole line
+    is covered.
     """
     px = canvas.load()
-    h = y1 - y0
+    cy = (y0 + y1) // 2
+    band = range(cy - 8, cy + 8)  # full-width sampling band
 
     def col_lum(x: int) -> int:
-        return sum(sum(px[x, y]) for y in range(y0, y1)) // h
+        return sum(sum(px[x, y]) for y in band) // len(band)
 
     flagged: list[int] = []
-    for x in range(x0 + 8, x1 - 8):
+    for x in range(x0 + 6, x1 - 6):
         c = col_lum(x)
-        ln, lr = col_lum(x - 8), col_lum(x + 8)
-        # ``ln/lr > 120`` keeps us off the dark background while still
+        ln, lr = col_lum(x - 6), col_lum(x + 6)
+        # ``ln/lr > 110`` keeps us off the dark background while still
         # catching accent lines inside the darker violet pills (the gold
         # pill is far brighter; one floor has to serve both).
-        if c < ln - 22 and c < lr - 22 and ln > 120 and lr > 120:
+        if c < ln - 18 and c < lr - 18 and ln > 110 and lr > 110:
             flagged.append(x)
     if not flagged:
         return
@@ -443,9 +447,12 @@ class _Renderer:
             slot = _PILLS[rank]
             bx0, by0, bx1, by1 = slot["band"]
             _erase_band(canvas, bx0, by0, bx1, by1, slot["above"], slot["below"])
-            # Remove the template's decorative accent line inside the pill.
+            # Remove the template's decorative accent lines inside the pill
+            # (including the pair near the right cap). Reach close to px1 —
+            # the detector samples a full-width centre band so the cap's
+            # background doesn't trip it.
             px0, py0, px1, py1 = slot["pill"]
-            _remove_vlines(canvas, px0 + 30, py0 + 24, px1 - 30, py1 - 24)
+            _remove_vlines(canvas, px0 + 24, py0 + 24, px1 - 12, py1 - 24)
         for rank, (by0, by1) in _SIDE_BANDS.items():
             s_above, s_below = _SIDE_SAMPLES[rank]
             _erase_band(
@@ -488,27 +495,31 @@ class _Renderer:
 
         # Avatar — left edges of all three pills share a common x so the
         # avatars line up vertically even though the gold pill is indented
-        # right in the template.
-        av_d = int(pill_h * 0.56)
+        # right in the template. The 2nd/3rd pills are physically narrow,
+        # so their avatars are a bit smaller to give the name more room.
+        av_frac = {1: 0.56, 2: 0.50, 3: 0.50}[rank]
+        av_d = int(pill_h * av_frac)
         av_x = _PILL_AVATAR_LEFT
         av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
-        # Everything sits within the capsule's straight body (between the
-        # rounded caps) so nothing crowds the right curve.
-        radius = pill_h // 2
-        safe_right = px1 - radius + int(pill_h * 0.10)
+        # Text sits on the vertical centreline, where the capsule is full
+        # width right up to px1 (the rounded cap only clips the top/bottom
+        # corners). So we can use almost the whole pill — just keep a small
+        # margin off the very edge.
+        safe_right = px1 - int(pill_h * 0.12)
 
         # Ordinal label ("1st"/"2nd"/"3rd") right next to the avatar.
-        ord_size = {1: 54, 2: 46, 3: 38}[rank]
+        ord_size = {1: 52, 2: 42, 3: 36}[rank]
         ord_img = _slanted_text(
             _ordinal(rank), _fonts.sans(ord_size, weight=800), PILL_ORDINAL
         )
-        ord_x = av_x + av_d + int(pill_h * 0.08)
+        ord_x = av_x + av_d + 12
         _paste_v_centre(canvas, ord_img, ord_x, cy)
 
-        # Level tag — right-aligned, kept inside the straight body.
-        level_size = {1: 44, 2: 38, 3: 30}[rank]
+        # Level tag — right-aligned, kept inside the straight body. Compact
+        # on the smaller pills so the name keeps the largest middle slot.
+        level_size = {1: 42, 2: 30, 3: 28}[rank]
         level_img = _slanted_text(
             f"Lv {entry.level}", _fonts.sans(level_size, weight=800), PILL_LEVEL
         )
@@ -516,15 +527,15 @@ class _Renderer:
 
         # Name fills the gap between the ordinal and the level tag. Max
         # sizes step down 1st > 2nd > 3rd; long names shrink to fit.
-        name_x = ord_x + ord_img.width + int(pill_h * 0.10)
-        name_max = (safe_right - level_img.width - int(pill_h * 0.14)) - name_x
+        name_x = ord_x + ord_img.width + 14
+        name_max = (safe_right - level_img.width - 16) - name_x
         max_size = {1: 108, 2: 96, 3: 74}[rank]
         name = _fit_name(
             entry.display_name,
             PILL_TEXT,
             max_w=max(name_max, 40),
             max_size=max_size,
-            min_size=20,
+            min_size=22,
             weight=800,
         )
         _paste_v_centre(canvas, name, name_x, cy)
@@ -555,35 +566,37 @@ class _Renderer:
             )
             canvas.paste(band, (0, 0), band)
 
-        # Small avatar at the left of the panel.
-        av_d = 40
-        av_x = _SIDE_X0 + 8
+        # The side panel is narrow (~180px), so every element is compact to
+        # leave the name a usable middle slot: small avatar, small ordinal
+        # next to it, level numeral right-aligned, name fills the rest.
+        av_d = 34
+        av_x = _SIDE_X0 + 7
         av = _avatar_with_ring(entry.avatar_bytes, av_d, (70, 50, 140))
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
         # Ordinal label ("4th"…"10th") right next to the avatar.
         ord_img = _slanted_text(
-            _ordinal(rank), _fonts.sans(20, weight=800), SIDE_ORDINAL
+            _ordinal(rank), _fonts.sans(17, weight=800), SIDE_ORDINAL
         )
-        ord_x = av_x + av_d + 8
+        ord_x = av_x + av_d + 6
         _paste_v_centre(canvas, ord_img, ord_x, cy)
 
-        # Level tag, right-aligned.
+        # Level numeral, right-aligned (compact "Lv N").
         level_img = _slanted_text(
-            f"Lv {entry.level}", _fonts.sans(20, weight=800), SIDE_LEVEL
+            f"Lv {entry.level}", _fonts.sans(16, weight=800), SIDE_LEVEL
         )
-        level_right = _SIDE_X1 - 10
+        level_right = _SIDE_X1 - 8
         _paste_right_v_centre(canvas, level_img, level_right, cy)
 
         # Name between the ordinal and the level.
-        name_x = ord_x + ord_img.width + 8
-        name_max = (level_right - level_img.width - 8) - name_x
+        name_x = ord_x + ord_img.width + 7
+        name_max = (level_right - level_img.width - 7) - name_x
         name = _fit_name(
             entry.display_name,
             SIDE_TEXT,
-            max_w=max(name_max, 24),
-            max_size=22,
-            min_size=11,
-            weight=720,
+            max_w=max(name_max, 20),
+            max_size=19,
+            min_size=10,
+            weight=760,
         )
         _paste_v_centre(canvas, name, name_x, cy)
