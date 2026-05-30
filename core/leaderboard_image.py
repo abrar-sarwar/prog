@@ -493,12 +493,19 @@ class _Renderer:
         cy = (py0 + py1) // 2
         pill_h = py1 - py0
 
+        # Big rank label in the far-left gutter, BEFORE the avatar, ending
+        # just before the shared avatar column so all three line up.
+        ord_size = {1: 72, 2: 64, 3: 58}[rank]
+        ord_img = _slanted_text(
+            _ordinal(rank), _fonts.sans(ord_size, weight=800), PILL_ORDINAL
+        )
+        ord_right = _PILL_AVATAR_LEFT - 14
+        _paste_right_v_centre(canvas, ord_img, ord_right, cy)
+
         # Avatar — left edges of all three pills share a common x so the
         # avatars line up vertically even though the gold pill is indented
-        # right in the template. The 2nd/3rd pills are physically narrow,
-        # so their avatars are a bit smaller to give the name more room.
-        av_frac = {1: 0.56, 2: 0.50, 3: 0.50}[rank]
-        av_d = int(pill_h * av_frac)
+        # right in the template.
+        av_d = int(pill_h * 0.54)
         av_x = _PILL_AVATAR_LEFT
         av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
         canvas.paste(av, (av_x, cy - av_d // 2), av)
@@ -509,33 +516,26 @@ class _Renderer:
         # margin off the very edge.
         safe_right = px1 - int(pill_h * 0.12)
 
-        # Ordinal label ("1st"/"2nd"/"3rd") right next to the avatar.
-        ord_size = {1: 52, 2: 42, 3: 36}[rank]
-        ord_img = _slanted_text(
-            _ordinal(rank), _fonts.sans(ord_size, weight=800), PILL_ORDINAL
-        )
-        ord_x = av_x + av_d + 12
-        _paste_v_centre(canvas, ord_img, ord_x, cy)
-
         # Level tag — right-aligned, kept inside the straight body. Compact
         # on the smaller pills so the name keeps the largest middle slot.
-        level_size = {1: 42, 2: 30, 3: 28}[rank]
+        level_size = {1: 42, 2: 32, 3: 28}[rank]
         level_img = _slanted_text(
             f"Lv {entry.level}", _fonts.sans(level_size, weight=800), PILL_LEVEL
         )
         _paste_right_v_centre(canvas, level_img, safe_right, cy)
 
-        # Name fills the gap between the ordinal and the level tag. Max
-        # sizes step down 1st > 2nd > 3rd; long names shrink to fit.
-        name_x = ord_x + ord_img.width + 14
-        name_max = (safe_right - level_img.width - 16) - name_x
-        max_size = {1: 108, 2: 96, 3: 74}[rank]
+        # Name fills the gap between the avatar and the level tag. It always
+        # renders in full (low min size means it shrinks to fit rather than
+        # truncating), and is sized as large as the slot allows.
+        name_x = av_x + av_d + 18
+        name_max = (safe_right - level_img.width - 18) - name_x
+        max_size = {1: 112, 2: 100, 3: 84}[rank]
         name = _fit_name(
             entry.display_name,
             PILL_TEXT,
             max_w=max(name_max, 40),
             max_size=max_size,
-            min_size=22,
+            min_size=14,
             weight=800,
         )
         _paste_v_centre(canvas, name, name_x, cy)
@@ -566,37 +566,36 @@ class _Renderer:
             )
             canvas.paste(band, (0, 0), band)
 
-        # The side panel is narrow (~180px), so every element is compact to
-        # leave the name a usable middle slot: small avatar, small ordinal
-        # next to it, level numeral right-aligned, name fills the rest.
-        av_d = 34
-        av_x = _SIDE_X0 + 7
+        # The side panel is only ~180px wide, so every element is squeezed
+        # to leave the name the largest possible slot. Rank label sits in a
+        # tight far-left gutter, then a small avatar, then the name, then a
+        # compact level numeral. The name always renders in full (it shrinks
+        # to fit rather than truncating).
+        ord_img = _slanted_text(
+            _ordinal(rank), _fonts.sans(18, weight=800), SIDE_ORDINAL
+        )
+        ord_right = _SIDE_X0 + 34
+        _paste_right_v_centre(canvas, ord_img, ord_right, cy)
+
+        av_d = 30
+        av_x = ord_right + 5
         av = _avatar_with_ring(entry.avatar_bytes, av_d, (70, 50, 140))
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
-        # Ordinal label ("4th"…"10th") right next to the avatar.
-        ord_img = _slanted_text(
-            _ordinal(rank), _fonts.sans(17, weight=800), SIDE_ORDINAL
-        )
-        ord_x = av_x + av_d + 6
-        _paste_v_centre(canvas, ord_img, ord_x, cy)
-
-        # Level numeral, right-aligned (compact "Lv N").
         level_img = _slanted_text(
-            f"Lv {entry.level}", _fonts.sans(16, weight=800), SIDE_LEVEL
+            f"Lv {entry.level}", _fonts.sans(15, weight=800), SIDE_LEVEL
         )
-        level_right = _SIDE_X1 - 8
+        level_right = _SIDE_X1 - 6
         _paste_right_v_centre(canvas, level_img, level_right, cy)
 
-        # Name between the ordinal and the level.
-        name_x = ord_x + ord_img.width + 7
-        name_max = (level_right - level_img.width - 7) - name_x
+        name_x = av_x + av_d + 6
+        name_max = (level_right - level_img.width - 6) - name_x
         name = _fit_name(
             entry.display_name,
             SIDE_TEXT,
             max_w=max(name_max, 20),
-            max_size=19,
-            min_size=10,
+            max_size=18,
+            min_size=7,
             weight=760,
         )
         _paste_v_centre(canvas, name, name_x, cy)
