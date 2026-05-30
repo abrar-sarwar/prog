@@ -425,8 +425,10 @@ class _Renderer:
             entry.display_name,
             PILL_TEXT,
             max_w=max(max_name_w, 60),
+            # Low floor so even a very long name shrinks to fit IN FULL
+            # rather than being truncated with an ellipsis.
             max_size=cfg["name_size"],
-            min_size=30,
+            min_size=15,
             weight=800,
         )
 
@@ -515,8 +517,9 @@ class _Renderer:
                 entry.display_name,
                 SIDE_TEXT,
                 max_w=max(name_max, 24),
+                # Low floor so long names shrink to fit fully, never "S…".
                 max_size=SIDE_NAME_SIZE,
-                min_size=12,
+                min_size=8,
                 weight=760,
             )
             _paste_v_centre(canvas, name_img, name_x, cy)
