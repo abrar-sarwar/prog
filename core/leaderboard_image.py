@@ -41,27 +41,26 @@ _FONT_SERIF_PATH = _ASSETS_DIR / "Fraunces-VariableFont.ttf"
 # Canvas + layout
 # ---------------------------------------------------------------------------
 CANVAS_W = 1200
-CANVAS_H = 1200
+CANVAS_H = 1080
 
 # Slant applied to all "italic" text (top leans right by SLANT * height).
 SLANT = 0.20
 
-# Pill bounding boxes (x0, y0, x1, y1) for ranks 1-3, traced from the
-# reference mock (270px → scaled ×4.44 to this 1200² canvas). 1st sits
-# upper-right and is the biggest; 2nd and 3rd step down on the left, 3rd
-# slightly narrower than 2nd.
+# Pill bounding boxes (x0, y0, x1, y1) for ranks 1-3 — stacked vertically
+# down the left of the canvas. 1st is on top and largest; 2nd and 3rd step
+# down in size below it.
 PILL_BOXES = {
-    1: (516, 245, 966, 466),
-    2: (248, 595, 742, 722),
-    3: (248, 748, 690, 875),
+    1: (72, 250, 612, 452),
+    2: (72, 492, 560, 662),
+    3: (72, 700, 512, 850),
 }
 
-# Side panel (ranks 4-10) — a narrow tall column on the right that begins
-# at the 2nd pill's level and runs almost to the bottom edge.
-SIDE_X0 = 770
-SIDE_X1 = 1140
-SIDE_Y0 = 595
-SIDE_Y1 = 1150
+# Side panel (ranks 4-10) — sits in the bottom-right quadrant beside the
+# stacked pills.
+SIDE_X0 = 668
+SIDE_X1 = 1128
+SIDE_Y0 = 470
+SIDE_Y1 = 1040
 
 # ---------------------------------------------------------------------------
 # Palette
