@@ -34,9 +34,9 @@ VOICE_XP_TICK_SECONDS: int = 60
 
 # --- Leaderboard channel embed (change-driven, no schedule) ----------------
 
-LEADERBOARD_TOP_N: int = 5
-"""How many users are shown in ``/leaderboard`` (the sliding-window
-embed centred on the invoker)."""
+LEADERBOARD_TOP_N: int = 10
+"""How many users are shown in ``/leaderboard`` (the fixed top-N podium
+board: ranks 1-3 in pills, 4-10 in the side column)."""
 
 LEADERBOARD_IMAGE_TOP_N: int = 10
 """How many users render onto the persistent channel image."""

@@ -1,573 +1,260 @@
-"""PNG renderer for the persistent leaderboard embed.
+"""Podium-pill leaderboard image for the ``/leaderboard`` command.
 
-Produces a single sharp PNG card depicting the top-10 users for a guild.
-The card is rendered at 1200px wide (2x logical) so it stays crisp on
-Discord's retina displays.
+Design language
+---------------
+A bold editorial "podium" composition rendered on a deep aubergine
+backdrop:
 
-Design language — "editorial scoreboard"
-----------------------------------------
-Two type families, carefully partitioned:
+* A lowercase, heavily-slanted ``leaderboard`` masthead in the top-left
+  (Bricolage Grotesque, simulated oblique).
+* The top three sit in big rounded capsule "pills" arranged in a
+  descending staircase — 1st is a gold→amber gradient (shifted right and
+  largest), 2nd an indigo gradient, 3rd a lighter violet gradient. Each
+  pill carries the member's display name in a slanted serif (Fraunces).
+* Ranks 4-10 live in a translucent purple side panel to the right, one
+  name per row, top-to-bottom = rank 4→10. Vertical order conveys the
+  rank — there are no numbers, matching the source design.
+* If the viewer is in the top 10 their pill/row is subtly highlighted
+  (a hairline ring on a pill, a brighter band on a side row).
 
-* **Fraunces** (variable, OFL) — a high-contrast display serif with
-  optical-size + weight + softness + wonk axes. Used *only* for the
-  ``LEADERBOARD`` masthead and the top-3 ordinal labels (``1st`` /
-  ``2nd`` / ``3rd``). This is the "trophy" voice — premium and
-  editorial, but reserved.
-* **Bricolage Grotesque** (variable, OFL) — clean modern sans-serif.
-  Used for every user-facing string: the server name, all user
-  display names (top-3 and field alike), every ``Level X`` tag, and
-  the ordinals on rows 4-10. Sans is more legible for names; that
-  reverts a misstep from v4.
+Both typefaces are variable fonts shipped in ``assets/fonts``; italics
+are simulated with a horizontal shear so the look matches the mockup
+even though neither font ships an italic axis.
 
-Podium hierarchy is physical, not just typographic — the top-3 rows
-have *different* heights (1st > 2nd > 3rd) so the medal positions
-feel like an actual podium when you scan the card.
-
-Other rules:
-
-* Deep aubergine vertical gradient. No grain, no vignette — flat
-  surface so text contrast is maximal.
-* Server icon at the top-left in a rounded square (coat-of-arms inset).
-* Top-3 podium emphasis is structural: each top-3 row has a 6px
-  medal-coloured stripe on its left edge plus a hairline medal ring
-  on the avatar.
-* Names are the heroes — they auto-size *per row* to fill the
-  available width. Short names render giant; long names downsize and
-  finally truncate.
-* The only number besides the rank is the user's Level. XP is omitted.
-* No footer, no timestamp. The card is just the leaderboard.
-
-The renderer is pure synchronous Pillow code — call ``render_png`` from
-an executor so it never blocks the gateway loop.
+Everything is rendered at 2x logical resolution for retina-sharp output
+on Discord, then returned as PNG bytes.
 """
 
 from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-# ---------------------------------------------------------------------------
-# Assets
-# ---------------------------------------------------------------------------
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 _FONT_SANS_PATH = _ASSETS_DIR / "BricolageGrotesque-VariableFont.ttf"
 _FONT_SERIF_PATH = _ASSETS_DIR / "Fraunces-VariableFont.ttf"
 
+# ---------------------------------------------------------------------------
+# Canvas + layout
+# ---------------------------------------------------------------------------
+CANVAS_W = 1200
+CANVAS_H = 1180
+
+# Slant applied to all "italic" text (top leans right by SLANT * height).
+SLANT = 0.20
+
+# Pill bounding boxes (x0, y0, x1, y1) for ranks 1-3, in the staircase.
+PILL_BOXES = {
+    1: (352, 206, 1060, 404),
+    2: (64, 440, 690, 598),
+    3: (64, 632, 604, 768),
+}
+
+# Side panel (ranks 4-10).
+SIDE_X0 = 716
+SIDE_X1 = 1136
+SIDE_Y0 = 440
+SIDE_Y1 = 1132
 
 # ---------------------------------------------------------------------------
 # Palette
 # ---------------------------------------------------------------------------
+# Pill gradients: (left colour, right colour).
+GRAD_FIRST = ((247, 203, 118), (193, 124, 52))   # gold → amber
+GRAD_SECOND = ((124, 100, 232), (72, 58, 166))    # indigo
+GRAD_THIRD = ((158, 128, 240), (101, 80, 198))    # lighter violet
+PILL_GRADS = {1: GRAD_FIRST, 2: GRAD_SECOND, 3: GRAD_THIRD}
 
-# Background gradient endpoints (top -> bottom).
+# Text on the pills.
+TEXT_ON_GOLD = (46, 28, 10)
+TEXT_ON_PURPLE = (255, 255, 255)
+PILL_TEXT = {1: TEXT_ON_GOLD, 2: TEXT_ON_PURPLE, 3: TEXT_ON_PURPLE}
+
+# Side panel.
+SIDE_FILL = (123, 100, 190, 150)       # translucent violet block
+SIDE_DIVIDER = (255, 255, 255, 28)     # hairline between rows
+SIDE_HIGHLIGHT = (255, 255, 255, 60)   # viewer's row band
+SIDE_TEXT = (236, 229, 255)
+
+# Highlight (viewer) accent.
+ACCENT_HIGHLIGHT = (255, 255, 255)
+
+TITLE_COLOR = (244, 240, 252)
+
+# Shared with core.rank_image (kept stable for that module's import).
 BG_TOP = (14, 7, 23)
 BG_BOTTOM = (27, 14, 50)
-
-# Surface tints for row cards (low-alpha overlays on the gradient).
-SURFACE_TOP3 = (255, 255, 255, 22)
-SURFACE_STD = (255, 255, 255, 12)
-SURFACE_HIGHLIGHT = (244, 114, 182, 50)   # magenta-tinted, more opaque
-ACCENT_HIGHLIGHT = (244, 114, 182, 255)   # solid magenta — accent stripe colour
-
-# Hairline keylines.
-KEYLINE = (160, 134, 215, 70)
-KEYLINE_STRONG = (180, 156, 230, 130)
-
-# Text colours — much higher contrast than v1.
 TEXT_PRIMARY = (255, 255, 255, 255)
 TEXT_SECONDARY = (215, 203, 240, 255)
 TEXT_DIM = (160, 142, 200, 255)
 
-# Medal colours — pulled brighter so they read on dark backgrounds.
-GOLD = (255, 209, 102, 255)
-SILVER = (232, 236, 244, 255)
-BRONZE = (232, 148, 93, 255)
 
+class _FontBook:
+    """Lazily-loaded, size-and-weight-cached variable font accessor."""
 
-# ---------------------------------------------------------------------------
-# Layout constants
-# ---------------------------------------------------------------------------
-
-CANVAS_W = 1200
-H_PAD = 56            # left/right outer padding
-HEADER_H = 240
-STANDARD_ROW_H = 118
-BOTTOM_PAD = 24       # space below the last row (replaces the footer)
-CARD_RADIUS = 24
-STRIPE_WIDTH = 6
-STRIPE_INSET = 18     # how far in from the card's left edge the stripe sits
-
-# Per-rank podium dimensions. The hierarchy is physical: 1st > 2nd > 3rd
-# in row height, ordinal-label size, avatar size, name-bounds, and Level
-# size. Ordinals are smaller than v5; the gap between podium and field
-# closes from below (see STANDARD_RANK_SIZE).
-_PODIUM_DIMS: dict[int, dict] = {
-    1: {
-        "row_h": 244,
-        "ordinal_size": 112,
-        "avatar": 156,
-        "name_fit": (54, 100),
-        "name_weight": 800,    # 1st place name is the boldest in the whole card
-        "level_size": 60,
-    },
-    2: {
-        "row_h": 218,
-        "ordinal_size": 92,
-        "avatar": 130,
-        "name_fit": (46, 84),
-        "name_weight": 700,
-        "level_size": 50,
-    },
-    3: {
-        "row_h": 196,
-        "ordinal_size": 76,
-        "avatar": 108,
-        "name_fit": (40, 70),
-        "name_weight": 700,
-        "level_size": 44,
-    },
-}
-
-# Standard-row dimensions (ranks 4-10).
-AVATAR_STD = 74
-STANDARD_RANK_SIZE = 70    # was 56 in v5 — bumped to meet the smaller podium
-STANDARD_LEVEL_SIZE = 38   # was 32 in v5
-
-# Server icon at top-left.
-SERVER_ICON_SIZE = 116
-SERVER_ICON_RADIUS = 22
-
-# Adaptive name-fit bounds for standard rows (4-10). Same family as the
-# podium names (Bricolage) so visual rhythm carries through.
-NAME_FIT_STD = (32, 62)
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class LeaderboardEntry:
-    """One row of leaderboard data."""
-
-    rank: int
-    display_name: str
-    level: int
-    xp: int
-    avatar_bytes: Optional[bytes]  # raw PNG/JPG, None -> placeholder
-
-
-def render_png(
-    *,
-    guild_name: str,
-    guild_icon_bytes: Optional[bytes],
-    entries: list[LeaderboardEntry],
-    rendered_at: datetime,
-    highlight_rank: Optional[int] = None,
-) -> bytes:
-    """Render the leaderboard card to PNG bytes.
-
-    Each entry's ``rank`` field decides its styling: ``rank <= 3`` gets
-    the podium treatment, the rest get the standard row. This means the
-    same renderer handles both the channel's static top-10 and the
-    /leaderboard slash command's sliding window.
-
-    ``highlight_rank`` (optional) brightens the matching row and adds a
-    magenta accent stripe + a small "YOU" badge on the right, so the
-    invoker can spot themselves at a glance. Has no effect if no row in
-    ``entries`` matches.
-
-    Blocks for ~50-200 ms — run via ``loop.run_in_executor`` from async
-    contexts.
-    """
-    return _Renderer(
-        guild_name=guild_name,
-        guild_icon_bytes=guild_icon_bytes,
-        entries=entries,
-        rendered_at=rendered_at,
-        highlight_rank=highlight_rank,
-    ).render()
-
-
-# ---------------------------------------------------------------------------
-# Renderer (private)
-# ---------------------------------------------------------------------------
-
-
-class _Renderer:
-    def __init__(
-        self,
-        *,
-        guild_name: str,
-        guild_icon_bytes: Optional[bytes],
-        entries: list[LeaderboardEntry],
-        rendered_at: datetime,
-        highlight_rank: Optional[int] = None,
-    ) -> None:
-        self.guild_name = guild_name
-        self.guild_icon_bytes = guild_icon_bytes
-        self.entries = entries
-        self.rendered_at = rendered_at
-        self.highlight_rank = highlight_rank
-
-        # Split by rank value, not list position. A 5-row window centred
-        # on rank 6 has zero "podium" rows; a window centred on rank 2
-        # has three. The persistent top-10 falls into both cases too.
-        self.podium = [e for e in entries if e.rank <= 3]
-        self.standard = [e for e in entries if e.rank > 3]
-        podium_h = sum(_PODIUM_DIMS[e.rank]["row_h"] for e in self.podium)
-        self.height = (
-            HEADER_H
-            + podium_h
-            + len(self.standard) * STANDARD_ROW_H
-            + BOTTOM_PAD
-        )
-
+    def __init__(self) -> None:
         self._fonts: dict[str, ImageFont.FreeTypeFont] = {}
 
-    # ---------- entry point ----------
+    def _load(self, path: Path, size: int, weight: int) -> ImageFont.FreeTypeFont:
+        font = ImageFont.truetype(str(path), size=size)
+        try:
+            font.set_variation_by_axes([weight])
+        except Exception:
+            pass
+        return font
 
-    def render(self) -> bytes:
-        canvas = self._make_background(CANVAS_W, self.height)
-
-        y = self._draw_header(canvas)
-        for entry in self.podium:
-            y = self._draw_podium_row(canvas, entry, y)
-        for entry in self.standard:
-            y = self._draw_standard_row(canvas, entry, y)
-
-        buf = io.BytesIO()
-        canvas.convert("RGB").save(buf, format="PNG", optimize=True)
-        return buf.getvalue()
-
-    def _is_highlight(self, entry: LeaderboardEntry) -> bool:
-        return (
-            self.highlight_rank is not None
-            and entry.rank == self.highlight_rank
-        )
-
-    # ---------- fonts ----------
-
-    def _sans(self, size: int, weight: int = 600) -> ImageFont.FreeTypeFont:
-        """Return a cached Bricolage Grotesque face at the given size/weight.
-
-        Bricolage axes (fvar order): wght 200-800, wdth 75-100, opsz 12-96.
-        """
+    def sans(self, size: int, weight: int = 600) -> ImageFont.FreeTypeFont:
         key = f"sans:{size}:{weight}"
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
-        font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
-        try:
-            font.set_variation_by_axes([weight, 100, min(max(size, 12), 96)])
-        except Exception:
-            pass
+        font = self._load(_FONT_SANS_PATH, size, weight)
         self._fonts[key] = font
         return font
 
-    def _serif(self, size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
-        """Return a cached Fraunces face at the given size/weight.
-
-        Fraunces axes (fvar order): opsz 9-144, wght 100-900, SOFT 0-100,
-        WONK 0-1. We pin opsz to the rendered size for proper optical
-        sizing, run SOFT=0 (sharp serifs), and WONK=0 (clean letterforms
-        — no whimsical alternates).
-        """
+    def serif(self, size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
         key = f"serif:{size}:{weight}"
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
-        font = ImageFont.truetype(str(_FONT_SERIF_PATH), size=size)
-        try:
-            font.set_variation_by_axes(
-                [min(max(size, 9), 144), weight, 0, 0]
-            )
-        except Exception:
-            pass
+        font = self._load(_FONT_SERIF_PATH, size, weight)
         self._fonts[key] = font
         return font
 
-    # ---------- background ----------
 
-    def _make_background(self, w: int, h: int) -> Image.Image:
-        """Vertical gradient + atmospheric glowing orbs."""
-        canvas = make_atmospheric_background(
-            w,
-            h,
-            orbs=[
-                # Top-left magenta haze.
-                (int(w * 0.05), int(h * 0.08), int(w * 0.42), (244, 114, 182), 68, 140),
-                # Mid-right violet glow.
-                (int(w * 0.95), int(h * 0.45), int(w * 0.50), (149, 84, 220), 52, 160),
-                # Bottom-centre warm gold pool.
-                (int(w * 0.55), int(h * 1.02), int(w * 0.60), (255, 178, 102), 40, 180),
-            ],
-        )
-        return canvas
+_fonts = _FontBook()
 
-    # ---------- header ----------
 
-    def _draw_header(self, canvas: Image.Image) -> int:
-        draw = ImageDraw.Draw(canvas, "RGBA")
-        x = H_PAD
-        y_top = 52
+@dataclass(frozen=True)
+class LeaderboardEntry:
+    rank: int
+    display_name: str
+    level: int
+    xp: int
+    avatar_bytes: bytes | None
 
-        # Server icon (or placeholder mark).
-        if self.guild_icon_bytes is not None:
-            icon = _rounded_square_image(
-                self.guild_icon_bytes, SERVER_ICON_SIZE, SERVER_ICON_RADIUS
-            )
-        else:
-            icon = _icon_placeholder(
-                SERVER_ICON_SIZE,
-                SERVER_ICON_RADIUS,
-                self._sans(72, weight=800),
-            )
-        canvas.alpha_composite(icon, (x, y_top))
-        # Subtle inset border around the icon.
-        border = Image.new("RGBA", (SERVER_ICON_SIZE, SERVER_ICON_SIZE), (0, 0, 0, 0))
-        ImageDraw.Draw(border).rounded_rectangle(
-            (0, 0, SERVER_ICON_SIZE - 1, SERVER_ICON_SIZE - 1),
-            radius=SERVER_ICON_RADIUS,
-            outline=(255, 255, 255, 50),
-            width=2,
-        )
-        canvas.alpha_composite(border, (x, y_top))
-
-        # Title block — Fraunces, magazine-masthead scale.
-        title_x = x + SERVER_ICON_SIZE + 34
-        title_font = self._serif(96, weight=800)
-        # Optical-baseline nudge: Fraunces sits a bit higher in the bbox
-        # than Bricolage, so we hand-tune the y offset rather than rely
-        # on the bbox top alone.
-        draw.text(
-            (title_x, y_top - 14),
-            "LEADERBOARD",
-            font=title_font,
-            fill=TEXT_PRIMARY,
-        )
-
-        # Server name (clipped if very long). Bricolage SemiBold.
-        subtitle_font = self._sans(32, weight=600)
-        subtitle = _truncate(
-            self.guild_name,
-            subtitle_font,
-            CANVAS_W - title_x - H_PAD - 40,
-        )
-        draw.text(
-            (title_x, y_top + 116),
-            subtitle,
-            font=subtitle_font,
-            fill=TEXT_SECONDARY,
-        )
-
-        # Bottom hairline of the header.
-        line_y = HEADER_H - 1
-        draw.line([(H_PAD, line_y), (CANVAS_W - H_PAD, line_y)], fill=KEYLINE, width=1)
-
-        return HEADER_H
-
-    # ---------- adaptive name-fit ----------
-
-    def _fit_name(
-        self,
-        name: str,
-        max_width: int,
-        size_bounds: tuple[int, int],
-        *,
-        family: str = "sans",
-        weight: int = 700,
-    ) -> tuple[ImageFont.FreeTypeFont, str]:
-        """Pick the largest weight-``weight`` size in ``size_bounds`` that
-        lets ``name`` fit in ``max_width``. ``family`` is "sans"
-        (Bricolage) or "serif" (Fraunces). If even the minimum size
-        overflows, returns the min-size font and an ellipsized name.
-        """
-        loader = self._serif if family == "serif" else self._sans
-        min_size, max_size = size_bounds
-        for size in range(max_size, min_size - 1, -2):
-            font = loader(size, weight=weight)
-            bbox = font.getbbox(name)
-            if bbox[2] - bbox[0] <= max_width:
-                return font, name
-        font = loader(min_size, weight=weight)
-        return font, _truncate(name, font, max_width)
-
-    # ---------- podium rows (ranks 1..3) ----------
-
-    def _draw_podium_row(
-        self, canvas: Image.Image, entry: LeaderboardEntry, y: int
-    ) -> int:
-        dims = _PODIUM_DIMS[entry.rank]
-        row_h = dims["row_h"]
-        medal_color = {1: GOLD, 2: SILVER, 3: BRONZE}[entry.rank]
-        avatar_size = dims["avatar"]
-
-        highlighted = self._is_highlight(entry)
-        surface = SURFACE_HIGHLIGHT if highlighted else SURFACE_TOP3
-        _draw_row_card(canvas, y, row_h, fill=surface, keyline=KEYLINE)
-        _draw_left_stripe(canvas, y, row_h, color=medal_color)
-
-        draw = ImageDraw.Draw(canvas, "RGBA")
-
-        if highlighted:
-            _draw_highlight_outline(canvas, y, row_h)
-
-        # Ordinal label — Fraunces, medal-coloured, podium-scaled.
-        ordinal_text = _ordinal(entry.rank)
-        rank_font = self._serif(dims["ordinal_size"], weight=800)
-        rb = rank_font.getbbox(ordinal_text)
-        rh = rb[3] - rb[1]
-        rank_x = H_PAD + STRIPE_INSET + STRIPE_WIDTH + 22
-        rank_y = y + (row_h - rh) // 2 - rb[1]
-        draw.text((rank_x, rank_y), ordinal_text, font=rank_font, fill=medal_color)
-
-        # Avatar.
-        rank_w = rb[2] - rb[0]
-        ax = rank_x + rank_w + 40
-        ay = y + (row_h - avatar_size) // 2
-        if entry.avatar_bytes is not None:
-            avatar = _circular_image(entry.avatar_bytes, avatar_size)
-        else:
-            avatar = _avatar_placeholder(avatar_size, medal_color)
-        canvas.alpha_composite(avatar, (ax, ay))
-        ring_inset = 3
-        ring_size = avatar_size + 2 * ring_inset
-        ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
-        ImageDraw.Draw(ring).ellipse(
-            (0, 0, ring_size - 1, ring_size - 1),
-            outline=medal_color[:3] + (200,),
-            width=2,
-        )
-        canvas.alpha_composite(ring, (ax - ring_inset, ay - ring_inset))
-
-        # Right-anchored Level tag — Bricolage, medal-coloured.
-        level_font = self._sans(dims["level_size"], weight=700)
-        level_text = f"Level {entry.level}"
-        level_w = _text_width(draw, level_text, level_font)
-        level_x = CANVAS_W - H_PAD - 32 - level_w
-        lb = level_font.getbbox(level_text)
-        lh = lb[3] - lb[1]
-        level_y = y + (row_h - lh) // 2 - lb[1]
-        draw.text((level_x, level_y), level_text, font=level_font, fill=medal_color)
-
-        # Name — Bricolage sans-serif (matches the rest of the field).
-        # 1st place uses weight 800 (boldest), others 700.
-        text_x = ax + avatar_size + 36
-        # Reserve room for an optional YOU badge when highlighted so the
-        # name truncates cleanly instead of bumping into the badge.
-        right_block_left = level_x
-        if highlighted:
-            right_block_left -= 92  # YOU badge width + gutter
-        name_max = right_block_left - text_x - 40
-        name_font, name = self._fit_name(
-            entry.display_name,
-            name_max,
-            dims["name_fit"],
-            family="sans",
-            weight=dims["name_weight"],
-        )
-        nb = name_font.getbbox(name)
-        nh = nb[3] - nb[1]
-        ny = y + (row_h - nh) // 2 - nb[1]
-        draw.text((text_x, ny), name, font=name_font, fill=TEXT_PRIMARY)
-
-        if highlighted:
-            _draw_you_badge(
-                canvas,
-                x_right=level_x - 24,
-                y_centre=y + row_h // 2,
-                font=self._sans(22, weight=800),
-            )
-
-        return y + row_h
-
-    # ---------- standard rows (ranks 4..10) ----------
-
-    def _draw_standard_row(
-        self, canvas: Image.Image, entry: LeaderboardEntry, y: int
-    ) -> int:
-        row_h = STANDARD_ROW_H
-        highlighted = self._is_highlight(entry)
-        surface = SURFACE_HIGHLIGHT if highlighted else SURFACE_STD
-        _draw_row_card(canvas, y, row_h, fill=surface, keyline=KEYLINE)
-
-        draw = ImageDraw.Draw(canvas, "RGBA")
-
-        if highlighted:
-            # Accent magenta stripe on the left edge so the highlighted
-            # standard row gets its own visual marker (mirrors the medal
-            # stripe used for the podium rows).
-            _draw_left_stripe(canvas, y, row_h, color=ACCENT_HIGHLIGHT)
-            _draw_highlight_outline(canvas, y, row_h)
-
-        # Rank (Bricolage; serif is reserved for the podium).
-        rank_font = self._sans(STANDARD_RANK_SIZE, weight=700)
-        rank_text = _ordinal(entry.rank)
-        rb = rank_font.getbbox(rank_text)
-        rh = rb[3] - rb[1]
-        rank_x = H_PAD + 26
-        ry = y + (row_h - rh) // 2 - rb[1]
-        draw.text((rank_x, ry), rank_text, font=rank_font, fill=TEXT_SECONDARY)
-
-        # Avatar.
-        rank_w = rb[2] - rb[0]
-        ax = rank_x + rank_w + 28
-        ay = y + (row_h - AVATAR_STD) // 2
-        if entry.avatar_bytes is not None:
-            avatar = _circular_image(entry.avatar_bytes, AVATAR_STD)
-        else:
-            avatar = _avatar_placeholder(AVATAR_STD, (160, 134, 215, 255))
-        canvas.alpha_composite(avatar, (ax, ay))
-        ring = Image.new("RGBA", (AVATAR_STD + 4, AVATAR_STD + 4), (0, 0, 0, 0))
-        ImageDraw.Draw(ring).ellipse(
-            (0, 0, AVATAR_STD + 3, AVATAR_STD + 3),
-            outline=KEYLINE_STRONG,
-            width=1,
-        )
-        canvas.alpha_composite(ring, (ax - 2, ay - 2))
-
-        # Right-anchored Level tag — bigger, brighter.
-        level_font = self._sans(STANDARD_LEVEL_SIZE, weight=700)
-        level_text = f"Level {entry.level}"
-        level_w = _text_width(draw, level_text, level_font)
-        level_x = CANVAS_W - H_PAD - 28 - level_w
-        lb = level_font.getbbox(level_text)
-        lh = lb[3] - lb[1]
-        level_y = y + (row_h - lh) // 2 - lb[1]
-        draw.text((level_x, level_y), level_text, font=level_font, fill=TEXT_PRIMARY)
-
-        # Name — Bricolage, adaptive, fills the middle.
-        name_x = ax + AVATAR_STD + 28
-        right_block_left = level_x
-        if highlighted:
-            right_block_left -= 84  # leave room for the YOU badge
-        name_max = right_block_left - name_x - 32
-        name_font, name = self._fit_name(entry.display_name, name_max, NAME_FIT_STD)
-        nb = name_font.getbbox(name)
-        nh = nb[3] - nb[1]
-        ny = y + (row_h - nh) // 2 - nb[1]
-        draw.text((name_x, ny), name, font=name_font, fill=TEXT_PRIMARY)
-
-        if highlighted:
-            _draw_you_badge(
-                canvas,
-                x_right=level_x - 20,
-                y_centre=y + row_h // 2,
-                font=self._sans(18, weight=800),
-            )
-
-        return y + row_h
 
 # ---------------------------------------------------------------------------
-# Drawing helpers (module-private; pure functions over Image)
+# Slanted ("italic") text
 # ---------------------------------------------------------------------------
+def _slanted_text(
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    fill: tuple[int, int, int],
+    slant: float = SLANT,
+) -> Image.Image:
+    """Render ``text`` and shear it so the top leans right (faux italic).
+
+    Returns a tightly-cropped RGBA image."""
+    tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    bbox = tmp.textbbox((0, 0), text, font=font)
+    tw = max(bbox[2] - bbox[0], 1)
+    th = max(bbox[3] - bbox[1], 1)
+    pad = 8
+    base = Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
+    ImageDraw.Draw(base).text(
+        (pad - bbox[0], pad - bbox[1]), text, font=font, fill=fill + (255,)
+    )
+    h = base.height
+    extra = int(abs(slant) * h) + 1
+    sheared = base.transform(
+        (base.width + extra, h),
+        Image.AFFINE,
+        (1, slant, -slant * h, 0, 1, 0),
+        resample=Image.BICUBIC,
+    )
+    return sheared.crop(sheared.getbbox() or (0, 0, 1, 1))
+
+
+def _fit_serif(
+    text: str,
+    fill: tuple[int, int, int],
+    *,
+    max_w: int,
+    max_size: int,
+    min_size: int,
+    weight: int = 600,
+) -> Image.Image:
+    """Slanted serif text shrunk to fit ``max_w``; ellipsised if needed."""
+    size = max_size
+    while size >= min_size:
+        img = _slanted_text(text, _fonts.serif(size, weight=weight), fill)
+        if img.width <= max_w:
+            return img
+        size -= 3
+    # Still too wide at the minimum size — truncate with an ellipsis.
+    font = _fonts.serif(min_size, weight=weight)
+    trimmed = text
+    while trimmed and _slanted_text(trimmed + "…", font, fill).width > max_w:
+        trimmed = trimmed[:-1]
+    return _slanted_text((trimmed + "…") if trimmed else "…", font, fill)
+
+
+def _paste_v_centre(canvas: Image.Image, img: Image.Image, x: int, cy: int) -> None:
+    canvas.paste(img, (x, cy - img.height // 2), img)
+
+
+def _circular(image_bytes: bytes, size: int) -> Image.Image:
+    """Decode raw image bytes and crop to a circle at ``size`` px."""
+    img = (
+        Image.open(io.BytesIO(image_bytes))
+        .convert("RGBA")
+        .resize((size, size), Image.LANCZOS)
+    )
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(img, (0, 0), mask)
+    return out
+
+
+def _circle_placeholder(size: int, accent: tuple[int, int, int]) -> Image.Image:
+    """Circular fallback avatar when a member has no avatar bytes."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.ellipse((0, 0, size - 1, size - 1), fill=(38, 24, 64, 255))
+    d.ellipse(
+        (3, 3, size - 4, size - 4), outline=accent + (150,), width=2
+    )
+    return img
+
+
+# ---------------------------------------------------------------------------
+# Background
+# ---------------------------------------------------------------------------
+def _draw_background(width: int, height: int) -> Image.Image:
+    """Deep aubergine vertical gradient with a soft diagonal light streak."""
+    top = (20, 11, 31)
+    bottom = (11, 6, 19)
+    column = Image.new("RGB", (1, height))
+    cpx = column.load()
+    for y in range(height):
+        t = y / max(height - 1, 1)
+        cpx[0, y] = (
+            int(top[0] + (bottom[0] - top[0]) * t),
+            int(top[1] + (bottom[1] - top[1]) * t),
+            int(top[2] + (bottom[2] - top[2]) * t),
+        )
+    base = column.resize((width, height)).convert("RGBA")
+
+    # Atmospheric glow: a faint diagonal streak + a couple of soft orbs.
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+    odraw.ellipse(
+        (int(width * 0.55), int(-height * 0.15),
+         int(width * 1.25), int(height * 0.45)),
+        fill=(120, 96, 200, 30),
+    )
+    odraw.ellipse(
+        (int(width * -0.1), int(height * 0.6),
+         int(width * 0.4), int(height * 1.1)),
+        fill=(64, 48, 120, 26),
+    )
+    overlay = overlay.filter(ImageFilter.GaussianBlur(150))
+    return Image.alpha_composite(base, overlay)
 
 
 def make_atmospheric_background(
@@ -576,15 +263,11 @@ def make_atmospheric_background(
     *,
     orbs: list[tuple[int, int, int, tuple, int, int]],
 ) -> Image.Image:
-    """Build a deep-aubergine gradient canvas with floating glowing orbs.
+    """Deep-aubergine gradient canvas with floating glowing orbs.
 
-    Each orb is ``(cx, cy, radius, rgb, alpha, blur)``; the orb is drawn
-    on its own layer at the given alpha, gaussian-blurred, then
-    alpha-composited over the gradient base. This is what gives the
-    leaderboard and rank cards their "nebula behind glass" depth without
-    needing actual mesh-gradient math.
+    Each orb is ``(cx, cy, radius, rgb, alpha, blur)``. Kept here because
+    :mod:`core.rank_image` shares this helper for its own backdrop.
     """
-    # Vertical smoothstep gradient — same as the v1 background.
     base = Image.new("RGBA", (w, h), BG_TOP + (255,))
     draw = ImageDraw.Draw(base)
     for y in range(h):
@@ -608,223 +291,194 @@ def make_atmospheric_background(
     return base
 
 
-def _circular_image(image_bytes: bytes, size: int) -> Image.Image:
-    """Decode raw image bytes and crop to a circle at the given pixel size."""
-    img = (
-        Image.open(io.BytesIO(image_bytes))
-        .convert("RGBA")
-        .resize((size, size), Image.LANCZOS)
-    )
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
-    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    out.paste(img, (0, 0), mask)
-    return out
-
-
-def _rounded_square_image(image_bytes: bytes, size: int, radius: int) -> Image.Image:
-    """Decode raw image bytes into a rounded-square."""
-    img = (
-        Image.open(io.BytesIO(image_bytes))
-        .convert("RGBA")
-        .resize((size, size), Image.LANCZOS)
-    )
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        (0, 0, size, size), radius=radius, fill=255
-    )
-    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    out.paste(img, (0, 0), mask)
-    return out
-
-
-def _avatar_placeholder(size: int, accent: tuple) -> Image.Image:
-    """A circular avatar placeholder when a user has no avatar bytes."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((0, 0, size, size), fill=(45, 28, 80, 255))
-    d.ellipse(
-        (3, 3, size - 3, size - 3),
-        outline=accent[:3] + (180,),
-        width=2,
-    )
-    return img
-
-
-def _icon_placeholder(
-    size: int, radius: int, font: ImageFont.FreeTypeFont
-) -> Image.Image:
-    """Rounded-square placeholder used when the guild has no icon set."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle(
-        (0, 0, size, size), radius=radius, fill=(45, 28, 80, 255)
-    )
-    text = "p"
-    bbox = font.getbbox(text)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    d.text(
-        ((size - tw) // 2 - bbox[0], (size - th) // 2 - bbox[1]),
-        text,
-        font=font,
-        fill=TEXT_PRIMARY,
-    )
-    return img
-
-
-def _draw_row_card(
-    canvas: Image.Image,
-    y: int,
-    h: int,
-    *,
-    fill: tuple,
-    keyline: tuple,
-) -> None:
-    """Soft tinted card surface for one leaderboard row + hairline bottom."""
-    card_w = CANVAS_W - 2 * H_PAD
-    card = Image.new("RGBA", (card_w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(card).rounded_rectangle(
-        (0, 0, card_w - 1, h - 1),
-        radius=CARD_RADIUS,
-        fill=fill,
-    )
-    canvas.alpha_composite(card, (H_PAD, y))
-    ImageDraw.Draw(canvas, "RGBA").line(
-        [(H_PAD + CARD_RADIUS, y + h - 1), (CANVAS_W - H_PAD - CARD_RADIUS, y + h - 1)],
-        fill=keyline,
-        width=1,
-    )
-
-
-def _draw_highlight_outline(canvas: Image.Image, y: int, h: int) -> None:
-    """Thin magenta hairline around a highlighted row card.
-
-    Pairs with the SURFACE_HIGHLIGHT fill to make the invoker's row
-    pop without overpowering the rest of the list.
-    """
-    card_w = CANVAS_W - 2 * H_PAD
-    outline = Image.new("RGBA", (card_w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(outline).rounded_rectangle(
-        (0, 0, card_w - 1, h - 1),
-        radius=CARD_RADIUS,
-        outline=(244, 114, 182, 180),
-        width=2,
-    )
-    canvas.alpha_composite(outline, (H_PAD, y))
-
-
-def _draw_you_badge(
-    canvas: Image.Image,
-    *,
-    x_right: int,
-    y_centre: int,
-    font: ImageFont.FreeTypeFont,
-) -> None:
-    """Small magenta pill that reads ``YOU`` — appears on the
-    highlighted row so the invoker can spot themselves immediately."""
-    pad_x = 14
-    pad_y = 6
-    d = ImageDraw.Draw(canvas, "RGBA")
-    text = "YOU"
-    bbox = font.getbbox(text)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    chip_w = tw + pad_x * 2
-    chip_h = th + pad_y * 2
-    x1 = x_right
-    x0 = x1 - chip_w
-    y0 = y_centre - chip_h // 2
-    y1 = y0 + chip_h
-    d.rounded_rectangle(
-        (x0, y0, x1, y1),
-        radius=chip_h // 2,
-        fill=ACCENT_HIGHLIGHT,
-    )
-    d.text(
-        (x0 + pad_x - bbox[0], y0 + pad_y - bbox[1]),
-        text,
-        font=font,
-        fill=(20, 8, 32, 255),
-    )
-
-
-def _draw_left_stripe(
-    canvas: Image.Image,
-    y: int,
-    h: int,
-    *,
-    color: tuple,
-) -> None:
-    """Draw the medal-coloured vertical edge stripe on a top-3 row card."""
-    x0 = H_PAD + STRIPE_INSET
-    x1 = x0 + STRIPE_WIDTH
-    y0 = y + 16
-    y1 = y + h - 16
-    stripe = Image.new("RGBA", (STRIPE_WIDTH, y1 - y0), (0, 0, 0, 0))
-    ImageDraw.Draw(stripe).rounded_rectangle(
-        (0, 0, STRIPE_WIDTH - 1, y1 - y0 - 1),
-        radius=STRIPE_WIDTH // 2,
-        fill=color[:3] + (255,),
-    )
-    canvas.alpha_composite(stripe, (x0, y0))
-
-
-def _text_width(
-    draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont
-) -> int:
-    """Return the rendered pixel width of ``text``."""
-    bbox = draw.textbbox((0, 0), text, font=font)
-    return bbox[2] - bbox[0]
-
-
-def _ordinal(n: int) -> str:
-    """Return ``n`` as an English ordinal string: 1 -> 1st, 2 -> 2nd,
-    3 -> 3rd, 4 -> 4th, ..., 11 -> 11th, 21 -> 21st, etc.
-    """
-    if 10 <= n % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
-
-def _truncate(
-    text: str, font: ImageFont.FreeTypeFont, max_width: int
-) -> str:
-    """Trim ``text`` with an ellipsis until it fits ``max_width`` pixels."""
-    if max_width <= 0:
-        return ""
-    bbox = font.getbbox(text)
-    if bbox[2] - bbox[0] <= max_width:
-        return text
-    ellipsis = "…"
-    trimmed = text
-    while trimmed:
-        candidate = trimmed + ellipsis
-        bbox = font.getbbox(candidate)
-        if bbox[2] - bbox[0] <= max_width:
-            return candidate
-        trimmed = trimmed[:-1]
-    return ellipsis
-
-
 # ---------------------------------------------------------------------------
-# Convenience for callers that don't want to build LeaderboardEntry tuples
+# Public API
 # ---------------------------------------------------------------------------
+def render_png(
+    *,
+    guild_name: str,
+    guild_icon_bytes: bytes | None,
+    entries: list[LeaderboardEntry],
+    rendered_at=None,
+    highlight_rank: int | None = None,
+) -> bytes:
+    return _Renderer(
+        entries=entries,
+        highlight_rank=highlight_rank,
+    ).render()
 
 
-def entries_from_iter(
-    rows: Iterable[tuple[int, str, int, int, Optional[bytes]]],
-) -> list[LeaderboardEntry]:
-    """Adapter: build a list of entries from ``(rank, name, level, xp, avatar)``."""
-    return [
-        LeaderboardEntry(
-            rank=rank,
-            display_name=name,
-            level=level,
-            xp=xp,
-            avatar_bytes=avatar,
+class _Renderer:
+    def __init__(
+        self,
+        *,
+        entries: list[LeaderboardEntry],
+        highlight_rank: int | None,
+    ) -> None:
+        self.entries = sorted(entries, key=lambda e: e.rank)
+        self.highlight_rank = highlight_rank
+        self._fonts = _fonts
+
+    def render(self) -> bytes:
+        canvas = _draw_background(CANVAS_W, CANVAS_H)
+        self._draw_title(canvas)
+
+        by_rank = {e.rank: e for e in self.entries}
+        for rank in (1, 2, 3):
+            entry = by_rank.get(rank)
+            if entry is not None:
+                self._draw_pill(canvas, entry)
+
+        side = [e for e in self.entries if 4 <= e.rank <= 10]
+        if side:
+            self._draw_side_panel(canvas, side)
+
+        buf = io.BytesIO()
+        canvas.convert("RGB").save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+
+    # -- title -----------------------------------------------------------
+    def _draw_title(self, canvas: Image.Image) -> None:
+        img = _slanted_text(
+            "leaderboard", self._fonts.sans(108, weight=800), TITLE_COLOR
         )
-        for rank, name, level, xp, avatar in rows
-    ]
+        canvas.paste(img, (60, 56), img)
+
+    # -- podium pills ----------------------------------------------------
+    def _draw_pill(self, canvas: Image.Image, entry: LeaderboardEntry) -> None:
+        x0, y0, x1, y1 = PILL_BOXES[entry.rank]
+        w, h = x1 - x0, y1 - y0
+        radius = h // 2
+        c_left, c_right = PILL_GRADS[entry.rank]
+
+        # Horizontal gradient masked to a capsule.
+        row = Image.new("RGB", (w, 1))
+        rpx = row.load()
+        for x in range(w):
+            t = x / max(w - 1, 1)
+            rpx[x, 0] = (
+                int(c_left[0] + (c_right[0] - c_left[0]) * t),
+                int(c_left[1] + (c_right[1] - c_left[1]) * t),
+                int(c_left[2] + (c_right[2] - c_left[2]) * t),
+            )
+        pill = row.resize((w, h)).convert("RGBA")
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, w - 1, h - 1), radius=radius, fill=255
+        )
+        pill.putalpha(mask)
+        canvas.paste(pill, (x0, y0), pill)
+
+        # Viewer highlight: a hairline ring around the capsule.
+        if self.highlight_rank == entry.rank:
+            ring = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            ImageDraw.Draw(ring).rounded_rectangle(
+                (2, 2, w - 3, h - 3),
+                radius=radius - 2,
+                outline=ACCENT_HIGHLIGHT + (235,),
+                width=5,
+            )
+            canvas.paste(ring, (x0, y0), ring)
+
+        # Circular avatar tucked into the pill's rounded left cap.
+        cy = (y0 + y1) // 2
+        av_d = int(h * 0.72)
+        av_x = x0 + radius - av_d // 2
+        av_y = cy - av_d // 2
+        if entry.avatar_bytes is not None:
+            avatar = _circular(entry.avatar_bytes, av_d)
+        else:
+            avatar = _circle_placeholder(av_d, PILL_TEXT[entry.rank])
+        canvas.paste(avatar, (av_x, av_y), avatar)
+        ring = Image.new("RGBA", (av_d, av_d), (0, 0, 0, 0))
+        ImageDraw.Draw(ring).ellipse(
+            (1, 1, av_d - 2, av_d - 2),
+            outline=PILL_TEXT[entry.rank] + (140,),
+            width=3,
+        )
+        canvas.paste(ring, (av_x, av_y), ring)
+
+        # Display name (slanted serif), vertically centred after the avatar.
+        text_x = av_x + av_d + int(h * 0.16)
+        max_w = (x1 - text_x) - int(radius * 0.55)
+        max_size = {1: 104, 2: 80, 3: 70}[entry.rank]
+        name = _fit_serif(
+            entry.display_name,
+            PILL_TEXT[entry.rank],
+            max_w=max_w,
+            max_size=max_size,
+            min_size=34,
+            weight=620,
+        )
+        _paste_v_centre(canvas, name, text_x, cy)
+
+    # -- side panel (ranks 4-10) -----------------------------------------
+    def _draw_side_panel(
+        self, canvas: Image.Image, side: list[LeaderboardEntry]
+    ) -> None:
+        n = len(side)
+        row_h = (SIDE_Y1 - SIDE_Y0) // 7  # rows sized for a full 4-10 field
+        panel_h = row_h * n
+        radius = 28
+
+        # The panel + every row tint is built on one transparent overlay,
+        # then alpha-composited once. ImageDraw on an RGBA canvas does not
+        # blend low-alpha fills the way alpha_composite does, so going
+        # through an overlay is what keeps the tints translucent.
+        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        od.rounded_rectangle(
+            (SIDE_X0, SIDE_Y0, SIDE_X1, SIDE_Y0 + panel_h),
+            radius=radius,
+            fill=SIDE_FILL,
+        )
+
+        # Viewer highlight: a brighter band on the matching row, clipped to
+        # the panel's rounded silhouette so corners stay clean.
+        panel_mask = Image.new("L", canvas.size, 0)
+        ImageDraw.Draw(panel_mask).rounded_rectangle(
+            (SIDE_X0, SIDE_Y0, SIDE_X1, SIDE_Y0 + panel_h),
+            radius=radius,
+            fill=255,
+        )
+        for i, entry in enumerate(side):
+            if self.highlight_rank != entry.rank:
+                continue
+            ry0 = SIDE_Y0 + i * row_h
+            ry1 = ry0 + row_h
+            band = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            ImageDraw.Draw(band).rectangle(
+                (SIDE_X0, ry0, SIDE_X1, ry1), fill=SIDE_HIGHLIGHT
+            )
+            band.putalpha(
+                Image.composite(band.getchannel("A"),
+                                Image.new("L", canvas.size, 0), panel_mask)
+            )
+            overlay.alpha_composite(band)
+
+        # Hairline dividers between rows (skip the top edge).
+        for i in range(1, n):
+            ly = SIDE_Y0 + i * row_h
+            od.line(
+                [(SIDE_X0 + 18, ly), (SIDE_X1 - 18, ly)],
+                fill=SIDE_DIVIDER,
+                width=1,
+            )
+
+        canvas.alpha_composite(overlay)
+
+        pad_x = 30
+        text_x = SIDE_X0 + pad_x
+        max_w = (SIDE_X1 - pad_x) - text_x
+        for i, entry in enumerate(side):
+            ry0 = SIDE_Y0 + i * row_h
+            ry1 = ry0 + row_h
+            name = _fit_serif(
+                entry.display_name,
+                SIDE_TEXT,
+                max_w=max_w,
+                max_size=44,
+                min_size=22,
+                weight=560,
+            )
+            _paste_v_centre(canvas, name, text_x, (ry0 + ry1) // 2)
