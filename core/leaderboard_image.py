@@ -87,12 +87,14 @@ _PILL_RING = {1: (150, 96, 24), 2: (54, 38, 120), 3: (74, 54, 140)}
 # --- Side column (ranks 4-10) ---------------------------------------------
 SIDE_X0 = 690
 SIDE_X1 = CANVAS_W - 36
-SIDE_Y0 = 470            # aligns with the 2nd pill
+SIDE_Y0 = 480            # aligns with the 2nd pill's top
 SIDE_Y1 = CANVAS_H - 40
 SIDE_ROW_GAP = 12        # vertical gap between row pills
 SIDE_FILL = (104, 84, 188, 235)
-SIDE_HIGHLIGHT = (255, 255, 255, 60)
+SIDE_EMPTY_FILL = (70, 58, 120, 150)    # dimmer fill for empty slots
+SIDE_HIGHLIGHT = (255, 255, 255, 70)
 SIDE_TEXT = (240, 234, 255)
+SIDE_EMPTY_TEXT = (150, 140, 185)       # dim rank label on empty slots
 SIDE_LEVEL = (214, 203, 244)
 SIDE_ORDINAL = (208, 196, 240)
 SIDE_NAME_SIZE = 30      # bigger than before; shrinks to fit if needed
