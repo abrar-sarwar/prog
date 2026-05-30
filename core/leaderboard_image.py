@@ -82,6 +82,9 @@ PILL_LEVEL = (255, 255, 255)
 SIDE_TEXT = (240, 234, 255)
 SIDE_LEVEL = (214, 203, 244)
 TITLE_COLOR = (244, 240, 252)
+# Rank label ("1st", "4th", …) — slightly muted so the name stays primary.
+PILL_ORDINAL = (255, 255, 255)
+SIDE_ORDINAL = (197, 184, 236)
 
 # Avatar ring tints per pill (subtle, picked to sit on gold/indigo/violet).
 _PILL_RING = {1: (150, 96, 24), 2: (54, 38, 120), 3: (74, 54, 140)}
@@ -215,6 +218,15 @@ def _paste_right_v_centre(
     canvas.paste(img, (x_right - img.width, cy - img.height // 2), img)
 
 
+def _ordinal(n: int) -> str:
+    """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', … 11 -> '11th'."""
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def _circular(image_bytes: bytes, size: int) -> Image.Image:
     """Decode raw image bytes and crop to a circle at ``size`` px."""
     img = (
@@ -331,7 +343,10 @@ def _remove_vlines(canvas: Image.Image, x0: int, y0: int, x1: int, y1: int) -> N
     for x in range(x0 + 8, x1 - 8):
         c = col_lum(x)
         ln, lr = col_lum(x - 8), col_lum(x + 8)
-        if c < ln - 28 and c < lr - 28 and ln > 200 and lr > 200:
+        # ``ln/lr > 120`` keeps us off the dark background while still
+        # catching accent lines inside the darker violet pills (the gold
+        # pill is far brighter; one floor has to serve both).
+        if c < ln - 22 and c < lr - 22 and ln > 120 and lr > 120:
             flagged.append(x)
     if not flagged:
         return
@@ -473,28 +488,37 @@ class _Renderer:
 
         # Avatar — left edges of all three pills share a common x so the
         # avatars line up vertically even though the gold pill is indented
-        # right in the template. Slightly smaller than before to free up
-        # horizontal room for the name.
+        # right in the template.
         av_d = int(pill_h * 0.56)
         av_x = _PILL_AVATAR_LEFT
         av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
-        # Level tag — compact, tucked as far right as the rounded cap
-        # allows so it steals minimal space from the name.
-        level_size = {1: 46, 2: 34, 3: 30}[rank]
+        # Everything sits within the capsule's straight body (between the
+        # rounded caps) so nothing crowds the right curve.
+        radius = pill_h // 2
+        safe_right = px1 - radius + int(pill_h * 0.10)
+
+        # Ordinal label ("1st"/"2nd"/"3rd") right next to the avatar.
+        ord_size = {1: 54, 2: 46, 3: 38}[rank]
+        ord_img = _slanted_text(
+            _ordinal(rank), _fonts.sans(ord_size, weight=800), PILL_ORDINAL
+        )
+        ord_x = av_x + av_d + int(pill_h * 0.08)
+        _paste_v_centre(canvas, ord_img, ord_x, cy)
+
+        # Level tag — right-aligned, kept inside the straight body.
+        level_size = {1: 44, 2: 38, 3: 30}[rank]
         level_img = _slanted_text(
             f"Lv {entry.level}", _fonts.sans(level_size, weight=800), PILL_LEVEL
         )
-        level_right = px1 - int(pill_h * 0.34)
-        _paste_right_v_centre(canvas, level_img, level_right, cy)
+        _paste_right_v_centre(canvas, level_img, safe_right, cy)
 
-        # Name fills the space between avatar and the level tag. Max sizes
-        # step down 1st > 2nd > 3rd; the low min size means long names
-        # shrink to fit rather than truncating.
-        name_x = av_x + av_d + int(pill_h * 0.10)
-        name_max = (level_right - level_img.width - 18) - name_x
-        max_size = {1: 116, 2: 92, 3: 76}[rank]
+        # Name fills the gap between the ordinal and the level tag. Max
+        # sizes step down 1st > 2nd > 3rd; long names shrink to fit.
+        name_x = ord_x + ord_img.width + int(pill_h * 0.10)
+        name_max = (safe_right - level_img.width - int(pill_h * 0.14)) - name_x
+        max_size = {1: 108, 2: 96, 3: 74}[rank]
         name = _fit_name(
             entry.display_name,
             PILL_TEXT,
@@ -537,22 +561,29 @@ class _Renderer:
         av = _avatar_with_ring(entry.avatar_bytes, av_d, (70, 50, 140))
         canvas.paste(av, (av_x, cy - av_d // 2), av)
 
+        # Ordinal label ("4th"…"10th") right next to the avatar.
+        ord_img = _slanted_text(
+            _ordinal(rank), _fonts.sans(20, weight=800), SIDE_ORDINAL
+        )
+        ord_x = av_x + av_d + 8
+        _paste_v_centre(canvas, ord_img, ord_x, cy)
+
         # Level tag, right-aligned.
         level_img = _slanted_text(
-            f"Lv {entry.level}", _fonts.sans(20, weight=700), SIDE_LEVEL
+            f"Lv {entry.level}", _fonts.sans(20, weight=800), SIDE_LEVEL
         )
         level_right = _SIDE_X1 - 10
         _paste_right_v_centre(canvas, level_img, level_right, cy)
 
-        # Name between avatar and level.
-        name_x = av_x + av_d + 8
-        name_max = (level_right - level_img.width - 10) - name_x
+        # Name between the ordinal and the level.
+        name_x = ord_x + ord_img.width + 8
+        name_max = (level_right - level_img.width - 8) - name_x
         name = _fit_name(
             entry.display_name,
             SIDE_TEXT,
-            max_w=max(name_max, 30),
-            max_size=24,
-            min_size=13,
+            max_w=max(name_max, 24),
+            max_size=22,
+            min_size=11,
             weight=720,
         )
         _paste_v_centre(canvas, name, name_x, cy)
