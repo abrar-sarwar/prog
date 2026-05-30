@@ -1,28 +1,18 @@
-"""Podium-pill leaderboard image for the ``/leaderboard`` command.
+"""Leaderboard image built by compositing onto the design template.
 
-Design language
----------------
-A bold editorial "podium" composition rendered on a deep aubergine
-backdrop:
+This does NOT redraw the leaderboard from scratch. It loads the actual
+``assets/leaderboard_template.png`` (the supplied Canva design) and
+overlays live data onto it: each placeholder word ("first", "second",
+… "tenth") is covered by reconstructing the pill/row background beneath
+it, then the real member name + level + avatar are drawn in its place.
+No XP is shown.
 
-* A lowercase, heavily-slanted ``leaderboard`` masthead in the top-left
-  (Bricolage Grotesque, simulated oblique).
-* The top three sit in big rounded capsule "pills" arranged in a
-  descending staircase — 1st is a gold→amber gradient (shifted right and
-  largest), 2nd an indigo gradient, 3rd a lighter violet gradient. Each
-  pill carries the member's display name in a slanted serif (Fraunces).
-* Ranks 4-10 live in a translucent purple side panel to the right, one
-  name per row, top-to-bottom = rank 4→10. Vertical order conveys the
-  rank — there are no numbers, matching the source design.
-* If the viewer is in the top 10 their pill/row is subtly highlighted
-  (a hairline ring on a pill, a brighter band on a side row).
+Slot geometry (pill boxes, glyph regions, right-column rows) is traced
+from the 1080×1080 template; if the template art changes, re-measure the
+``_PILLS`` / ``_SIDE_ROWS`` coordinates below.
 
-Both typefaces are variable fonts shipped in ``assets/fonts``; italics
-are simulated with a horizontal shear so the look matches the mockup
-even though neither font ships an italic axis.
-
-Everything is rendered at 2x logical resolution for retina-sharp output
-on Discord, then returned as PNG bytes.
+``make_atmospheric_background`` and the ``TEXT_*`` / ``BG_*`` constants
+are kept exported because :mod:`core.rank_image` imports them.
 """
 
 from __future__ import annotations
@@ -33,62 +23,62 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
-_FONT_SANS_PATH = _ASSETS_DIR / "BricolageGrotesque-VariableFont.ttf"
-_FONT_SERIF_PATH = _ASSETS_DIR / "Fraunces-VariableFont.ttf"
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+_FONTS_DIR = _ASSETS_DIR / "fonts"
+_FONT_SANS_PATH = _FONTS_DIR / "BricolageGrotesque-VariableFont.ttf"
+_FONT_SERIF_PATH = _FONTS_DIR / "Fraunces-VariableFont.ttf"
+_TEMPLATE_PATH = _ASSETS_DIR / "leaderboard_template.png"
 
-# ---------------------------------------------------------------------------
-# Canvas + layout
-# ---------------------------------------------------------------------------
-CANVAS_W = 1200
-CANVAS_H = 1080
-
-# Slant applied to all "italic" text (top leans right by SLANT * height).
+# Faux-italic shear, matching the slant of the template's own lettering.
 SLANT = 0.20
 
-# Pill bounding boxes (x0, y0, x1, y1) for ranks 1-3 — stacked vertically
-# down the left of the canvas. 1st is on top and largest; 2nd and 3rd step
-# down in size below it.
-PILL_BOXES = {
-    1: (72, 250, 612, 452),
-    2: (72, 492, 560, 662),
-    3: (72, 700, 512, 850),
+# ---------------------------------------------------------------------------
+# Slot geometry — traced from the 1080×1080 template.
+# ---------------------------------------------------------------------------
+# Each pill: the capsule bounds, the glyph band to erase (x0, y0, x1, y1),
+# and two candidate "clean" sample rows (above / below the glyphs). The
+# erase copies, per column, whichever sample row is actually pill-coloured
+# (caps are rounded, so one side can fall on the dark background).
+_PILLS = {
+    1: {"pill": (380, 220, 878, 539),
+        "band": (430, 252, 815, 432), "above": 236, "below": 452},
+    2: {"pill": (150, 538, 622, 754),
+        "band": (150, 588, 612, 700), "above": 560, "below": 724},
+    3: {"pill": (128, 756, 560, 967),
+        "band": (130, 814, 480, 918), "above": 782, "below": 944},
 }
 
-# Side panel (ranks 4-10) — sits in the bottom-right quadrant beside the
-# stacked pills.
-SIDE_X0 = 668
-SIDE_X1 = 1128
-SIDE_Y0 = 470
-SIDE_Y1 = 1040
+# Right column rows 4-10. The panel spans x≈794-974; each row's placeholder
+# word sits in a measured y-band. Erase samples from the inter-row gaps.
+_SIDE_X0 = 794
+_SIDE_X1 = 974
+# (rank: (band_y0, band_y1)) measured from the template.
+_SIDE_BANDS = {
+    4: (627, 654),
+    5: (690, 717),
+    6: (757, 783),
+    7: (819, 846),
+    8: (880, 913),
+    9: (944, 970),
+    10: (1006, 1032),
+}
 
-# ---------------------------------------------------------------------------
-# Palette
-# ---------------------------------------------------------------------------
-# Pill gradients: (left colour, right colour).
-GRAD_FIRST = ((247, 203, 118), (193, 124, 52))   # gold → amber
-GRAD_SECOND = ((124, 100, 232), (72, 58, 166))    # indigo
-GRAD_THIRD = ((158, 128, 240), (101, 80, 198))    # lighter violet
-PILL_GRADS = {1: GRAD_FIRST, 2: GRAD_SECOND, 3: GRAD_THIRD}
+# Text colours.
+PILL_TEXT = (255, 255, 255)
+PILL_LEVEL = (255, 255, 255)
+SIDE_TEXT = (240, 234, 255)
+SIDE_LEVEL = (214, 203, 244)
+TITLE_COLOR = (244, 240, 252)
 
-# Names are white on every pill (matches the reference).
-PILL_TEXT = {1: (255, 255, 255), 2: (255, 255, 255), 3: (255, 255, 255)}
-# Avatar ring colour per pill (a touch of the medal tone).
-PILL_RING = {1: (120, 74, 18), 2: (40, 28, 96), 3: (60, 44, 120)}
-
-# Side panel.
-SIDE_FILL = (108, 84, 188, 235)        # solid violet block (matches mock)
-SIDE_DIVIDER = (255, 255, 255, 30)     # hairline between rows
-SIDE_HIGHLIGHT = (255, 255, 255, 64)   # viewer's row band
-SIDE_TEXT = (238, 232, 255)
-SIDE_RANK_TEXT = (210, 198, 245)       # dim rank numeral on each row
+# Avatar ring tints per pill (subtle, picked to sit on gold/indigo/violet).
+_PILL_RING = {1: (150, 96, 24), 2: (54, 38, 120), 3: (74, 54, 140)}
 
 # Highlight (viewer) accent.
 ACCENT_HIGHLIGHT = (255, 255, 255)
 
-TITLE_COLOR = (244, 240, 252)
-
+# ---------------------------------------------------------------------------
 # Shared with core.rank_image (kept stable for that module's import).
+# ---------------------------------------------------------------------------
 BG_TOP = (14, 7, 23)
 BG_BOTTOM = (27, 14, 50)
 TEXT_PRIMARY = (255, 255, 255, 255)
@@ -102,20 +92,16 @@ class _FontBook:
     def __init__(self) -> None:
         self._fonts: dict[str, ImageFont.FreeTypeFont] = {}
 
-    def _load(self, path: Path, size: int, weight: int) -> ImageFont.FreeTypeFont:
-        font = ImageFont.truetype(str(path), size=size)
-        try:
-            font.set_variation_by_axes([weight])
-        except Exception:
-            pass
-        return font
-
-    def sans(self, size: int, weight: int = 600) -> ImageFont.FreeTypeFont:
+    def sans(self, size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
         key = f"sans:{size}:{weight}"
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
-        font = self._load(_FONT_SANS_PATH, size, weight)
+        font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
+        try:
+            font.set_variation_by_axes([weight, 100, min(max(size, 12), 96)])
+        except Exception:
+            pass
         self._fonts[key] = font
         return font
 
@@ -124,7 +110,11 @@ class _FontBook:
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
-        font = self._load(_FONT_SERIF_PATH, size, weight)
+        font = ImageFont.truetype(str(_FONT_SERIF_PATH), size=size)
+        try:
+            font.set_variation_by_axes([min(max(size, 9), 144), weight, 0, 0])
+        except Exception:
+            pass
         self._fonts[key] = font
         return font
 
@@ -142,7 +132,7 @@ class LeaderboardEntry:
 
 
 # ---------------------------------------------------------------------------
-# Slanted ("italic") text
+# Text + image helpers
 # ---------------------------------------------------------------------------
 def _slanted_text(
     text: str,
@@ -150,9 +140,7 @@ def _slanted_text(
     fill: tuple[int, int, int],
     slant: float = SLANT,
 ) -> Image.Image:
-    """Render ``text`` and shear it so the top leans right (faux italic).
-
-    Returns a tightly-cropped RGBA image."""
+    """Render ``text`` and shear it so the top leans right (faux italic)."""
     tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     bbox = tmp.textbbox((0, 0), text, font=font)
     tw = max(bbox[2] - bbox[0], 1)
@@ -180,19 +168,15 @@ def _fit_name(
     max_w: int,
     max_size: int,
     min_size: int,
-    weight: int = 700,
+    weight: int = 760,
 ) -> Image.Image:
-    """Slanted bold sans name shrunk to fit ``max_w``; ellipsised if needed.
-
-    All names on the board (pills + side column) use the same Bricolage
-    sans face as the masthead, faux-italicised, to match the reference."""
+    """Slanted bold-sans name shrunk to fit ``max_w``; ellipsised if needed."""
     size = max_size
     while size >= min_size:
         img = _slanted_text(text, _fonts.sans(size, weight=weight), fill)
         if img.width <= max_w:
             return img
         size -= 3
-    # Still too wide at the minimum size — truncate with an ellipsis.
     font = _fonts.sans(min_size, weight=weight)
     trimmed = text
     while trimmed and _slanted_text(trimmed + "…", font, fill).width > max_w:
@@ -202,6 +186,12 @@ def _fit_name(
 
 def _paste_v_centre(canvas: Image.Image, img: Image.Image, x: int, cy: int) -> None:
     canvas.paste(img, (x, cy - img.height // 2), img)
+
+
+def _paste_right_v_centre(
+    canvas: Image.Image, img: Image.Image, x_right: int, cy: int
+) -> None:
+    canvas.paste(img, (x_right - img.width, cy - img.height // 2), img)
 
 
 def _circular(image_bytes: bytes, size: int) -> Image.Image:
@@ -223,58 +213,68 @@ def _circle_placeholder(size: int, accent: tuple[int, int, int]) -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.ellipse((0, 0, size - 1, size - 1), fill=(38, 24, 64, 255))
-    d.ellipse(
-        (3, 3, size - 4, size - 4), outline=accent + (150,), width=2
-    )
+    d.ellipse((3, 3, size - 4, size - 4), outline=accent + (180,), width=3)
     return img
 
 
-# ---------------------------------------------------------------------------
-# Background
-# ---------------------------------------------------------------------------
-def _draw_background(width: int, height: int) -> Image.Image:
-    """Deep aubergine vertical gradient with a soft diagonal light streak."""
-    top = (20, 11, 31)
-    bottom = (11, 6, 19)
-    column = Image.new("RGB", (1, height))
-    cpx = column.load()
-    for y in range(height):
-        t = y / max(height - 1, 1)
-        cpx[0, y] = (
-            int(top[0] + (bottom[0] - top[0]) * t),
-            int(top[1] + (bottom[1] - top[1]) * t),
-            int(top[2] + (bottom[2] - top[2]) * t),
-        )
-    base = column.resize((width, height)).convert("RGBA")
-
-    # Atmospheric glow: a faint diagonal streak + a couple of soft orbs.
-    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    odraw = ImageDraw.Draw(overlay)
-    odraw.ellipse(
-        (int(width * 0.55), int(-height * 0.15),
-         int(width * 1.25), int(height * 0.45)),
-        fill=(120, 96, 200, 30),
+def _avatar_with_ring(
+    avatar_bytes: bytes | None, size: int, ring: tuple[int, int, int]
+) -> Image.Image:
+    if avatar_bytes is not None:
+        av = _circular(avatar_bytes, size)
+    else:
+        av = _circle_placeholder(size, ring)
+    out = av.copy()
+    ImageDraw.Draw(out).ellipse(
+        (1, 1, size - 2, size - 2), outline=ring + (200,), width=3
     )
-    odraw.ellipse(
-        (int(width * -0.1), int(height * 0.6),
-         int(width * 0.4), int(height * 1.1)),
-        fill=(64, 48, 120, 26),
-    )
-    overlay = overlay.filter(ImageFilter.GaussianBlur(150))
-    return Image.alpha_composite(base, overlay)
+    return out
 
 
+def _is_bg(c) -> bool:
+    """True for the dark aubergine backdrop (so we don't sample it)."""
+    return (c[0] + c[1] + c[2]) < 95
+
+
+def _erase_band(
+    canvas: Image.Image,
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    above_y: int,
+    below_y: int,
+) -> None:
+    """Cover a placeholder word by rebuilding the art beneath it.
+
+    The pill gradient/fade and the side-panel violet are essentially
+    constant down any single column, so for each column ``x`` we copy a
+    clean sample colour down through the glyph band. We try ``above_y``
+    first, falling back to ``below_y`` when the upper sample lands on the
+    dark background (which happens in the pills' rounded caps). Columns
+    where both samples are background are left untouched — there's no pill
+    there to rebuild.
+    """
+    px = canvas.load()
+    for x in range(x0, x1):
+        ca = px[x, above_y]
+        src = ca if not _is_bg(ca) else px[x, below_y]
+        if _is_bg(src):
+            continue
+        for y in range(y0, y1):
+            px[x, y] = src
+
+
+# ---------------------------------------------------------------------------
+# Background (shared with rank_image)
+# ---------------------------------------------------------------------------
 def make_atmospheric_background(
     w: int,
     h: int,
     *,
     orbs: list[tuple[int, int, int, tuple, int, int]],
 ) -> Image.Image:
-    """Deep-aubergine gradient canvas with floating glowing orbs.
-
-    Each orb is ``(cx, cy, radius, rgb, alpha, blur)``. Kept here because
-    :mod:`core.rank_image` shares this helper for its own backdrop.
-    """
+    """Deep-aubergine gradient canvas with floating glowing orbs."""
     base = Image.new("RGBA", (w, h), BG_TOP + (255,))
     draw = ImageDraw.Draw(base)
     for y in range(h):
@@ -294,7 +294,6 @@ def make_atmospheric_background(
         if blur > 0:
             layer = layer.filter(ImageFilter.GaussianBlur(blur))
         base = Image.alpha_composite(base, layer)
-
     return base
 
 
@@ -309,10 +308,7 @@ def render_png(
     rendered_at=None,
     highlight_rank: int | None = None,
 ) -> bytes:
-    return _Renderer(
-        entries=entries,
-        highlight_rank=highlight_rank,
-    ).render()
+    return _Renderer(entries=entries, highlight_rank=highlight_rank).render()
 
 
 class _Renderer:
@@ -322,189 +318,123 @@ class _Renderer:
         entries: list[LeaderboardEntry],
         highlight_rank: int | None,
     ) -> None:
-        self.entries = sorted(entries, key=lambda e: e.rank)
+        self.by_rank = {e.rank: e for e in entries}
         self.highlight_rank = highlight_rank
-        self._fonts = _fonts
 
     def render(self) -> bytes:
-        canvas = _draw_background(CANVAS_W, CANVAS_H)
-        self._draw_title(canvas)
+        canvas = Image.open(_TEMPLATE_PATH).convert("RGB")
 
-        by_rank = {e.rank: e for e in self.entries}
+        # Erase every placeholder word first, then draw all overlays. Doing
+        # the erases up front means a tall name never gets clipped by a
+        # neighbouring row's erase pass.
         for rank in (1, 2, 3):
-            entry = by_rank.get(rank)
-            if entry is not None:
-                self._draw_pill(canvas, entry)
+            slot = _PILLS[rank]
+            bx0, by0, bx1, by1 = slot["band"]
+            _erase_band(canvas, bx0, by0, bx1, by1, slot["above"], slot["below"])
+        for rank, (by0, by1) in _SIDE_BANDS.items():
+            _erase_band(
+                canvas, _SIDE_X0, by0 - 4, _SIDE_X1, by1 + 4,
+                by0 - 10, by1 + 10,
+            )
 
-        side = [e for e in self.entries if 4 <= e.rank <= 10]
-        if side:
-            self._draw_side_panel(canvas, side)
+        for rank in (1, 2, 3):
+            entry = self.by_rank.get(rank)
+            if entry is not None:
+                self._draw_pill(canvas, rank, entry)
+
+        for rank in range(4, 11):
+            entry = self.by_rank.get(rank)
+            if entry is not None:
+                self._draw_side_row(canvas, rank, entry)
 
         buf = io.BytesIO()
-        canvas.convert("RGB").save(buf, format="PNG", optimize=True)
+        canvas.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
 
-    # -- title -----------------------------------------------------------
-    def _draw_title(self, canvas: Image.Image) -> None:
-        img = _slanted_text(
-            "leaderboard", self._fonts.sans(104, weight=800), TITLE_COLOR
+    # -- podium pills (1-3) ----------------------------------------------
+    def _draw_pill(self, canvas: Image.Image, rank: int, entry: LeaderboardEntry) -> None:
+        slot = _PILLS[rank]
+        px0, py0, px1, py1 = slot["pill"]
+        cy = (py0 + py1) // 2
+        pill_h = py1 - py0
+
+        # Avatar flush to the left interior — covers the rounded cap and any
+        # glyph that started inside it.
+        av_d = int(pill_h * 0.62)
+        av_x = px0 + int(pill_h * 0.06)
+        av = _avatar_with_ring(entry.avatar_bytes, av_d, _PILL_RING[rank])
+        canvas.paste(av, (av_x, cy - av_d // 2), av)
+
+        # Level tag, right-aligned inside the pill (before the right cap).
+        level_size = {1: 48, 2: 38, 3: 34}[rank]
+        level_img = _slanted_text(
+            f"Lv {entry.level}", _fonts.sans(level_size, weight=720), PILL_LEVEL
         )
-        canvas.paste(img, (52, 48), img)
+        level_right = px1 - pill_h // 2 + int(pill_h * 0.10)
+        _paste_right_v_centre(canvas, level_img, level_right, cy)
 
-    # -- podium pills ----------------------------------------------------
-    def _draw_pill(self, canvas: Image.Image, entry: LeaderboardEntry) -> None:
-        x0, y0, x1, y1 = PILL_BOXES[entry.rank]
-        w, h = x1 - x0, y1 - y0
-        radius = h // 2
-        c_left, c_right = PILL_GRADS[entry.rank]
-
-        # Horizontal gradient masked to a capsule.
-        row = Image.new("RGB", (w, 1))
-        rpx = row.load()
-        for x in range(w):
-            t = x / max(w - 1, 1)
-            rpx[x, 0] = (
-                int(c_left[0] + (c_right[0] - c_left[0]) * t),
-                int(c_left[1] + (c_right[1] - c_left[1]) * t),
-                int(c_left[2] + (c_right[2] - c_left[2]) * t),
-            )
-        pill = row.resize((w, h)).convert("RGBA")
-        mask = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            (0, 0, w - 1, h - 1), radius=radius, fill=255
+        # Name fills the space between avatar and the level tag.
+        name_x = av_x + av_d + int(pill_h * 0.10)
+        name_max = (level_right - level_img.width - 20) - name_x
+        max_size = {1: 92, 2: 70, 3: 62}[rank]
+        name = _fit_name(
+            entry.display_name,
+            PILL_TEXT,
+            max_w=max(name_max, 40),
+            max_size=max_size,
+            min_size=28,
+            weight=780,
         )
-        pill.putalpha(mask)
-        canvas.paste(pill, (x0, y0), pill)
+        _paste_v_centre(canvas, name, name_x, cy)
 
-        # Viewer highlight: a hairline ring around the capsule.
-        if self.highlight_rank == entry.rank:
-            ring = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        # Viewer highlight — hairline ring around the capsule.
+        if self.highlight_rank == rank:
+            radius = pill_h // 2
+            ring = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
             ImageDraw.Draw(ring).rounded_rectangle(
-                (2, 2, w - 3, h - 3),
+                (px0 + 2, py0 + 2, px1 - 3, py1 - 3),
                 radius=radius - 2,
                 outline=ACCENT_HIGHLIGHT + (235,),
                 width=5,
             )
-            canvas.paste(ring, (x0, y0), ring)
+            canvas.paste(ring, (0, 0), ring)
 
-        # Circular avatar tucked into the pill's rounded left cap.
-        cy = (y0 + y1) // 2
-        av_d = int(h * 0.72)
-        av_x = x0 + radius - av_d // 2
-        av_y = cy - av_d // 2
-        if entry.avatar_bytes is not None:
-            avatar = _circular(entry.avatar_bytes, av_d)
-        else:
-            avatar = _circle_placeholder(av_d, PILL_TEXT[entry.rank])
-        canvas.paste(avatar, (av_x, av_y), avatar)
-        ring = Image.new("RGBA", (av_d, av_d), (0, 0, 0, 0))
-        ImageDraw.Draw(ring).ellipse(
-            (1, 1, av_d - 2, av_d - 2),
-            outline=PILL_RING[entry.rank] + (180,),
-            width=3,
-        )
-        canvas.paste(ring, (av_x, av_y), ring)
+    # -- side column (4-10) ----------------------------------------------
+    def _draw_side_row(self, canvas: Image.Image, rank: int, entry: LeaderboardEntry) -> None:
+        by0, by1 = _SIDE_BANDS[rank]
+        cy = (by0 + by1) // 2
 
-        # Display name (slanted bold sans), vertically centred after avatar.
-        text_x = av_x + av_d + int(h * 0.16)
-        max_w = (x1 - text_x) - int(radius * 0.55)
-        max_size = {1: 96, 2: 76, 3: 68}[entry.rank]
-        name = _fit_name(
-            entry.display_name,
-            PILL_TEXT[entry.rank],
-            max_w=max_w,
-            max_size=max_size,
-            min_size=32,
-            weight=780,
-        )
-        _paste_v_centre(canvas, name, text_x, cy)
-
-    # -- side panel (ranks 4-10) -----------------------------------------
-    def _draw_side_panel(
-        self, canvas: Image.Image, side: list[LeaderboardEntry]
-    ) -> None:
-        n = len(side)
-        row_h = (SIDE_Y1 - SIDE_Y0) // 7  # rows sized for a full 4-10 field
-        panel_h = row_h * n
-        radius = 28
-
-        # The panel + every row tint is built on one transparent overlay,
-        # then alpha-composited once. ImageDraw on an RGBA canvas does not
-        # blend low-alpha fills the way alpha_composite does, so going
-        # through an overlay is what keeps the tints translucent.
-        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        od = ImageDraw.Draw(overlay)
-        od.rounded_rectangle(
-            (SIDE_X0, SIDE_Y0, SIDE_X1, SIDE_Y0 + panel_h),
-            radius=radius,
-            fill=SIDE_FILL,
-        )
-
-        # Viewer highlight: a brighter band on the matching row, clipped to
-        # the panel's rounded silhouette so corners stay clean.
-        panel_mask = Image.new("L", canvas.size, 0)
-        ImageDraw.Draw(panel_mask).rounded_rectangle(
-            (SIDE_X0, SIDE_Y0, SIDE_X1, SIDE_Y0 + panel_h),
-            radius=radius,
-            fill=255,
-        )
-        for i, entry in enumerate(side):
-            if self.highlight_rank != entry.rank:
-                continue
-            ry0 = SIDE_Y0 + i * row_h
-            ry1 = ry0 + row_h
+        # Viewer highlight band (drawn before the glyphs).
+        if self.highlight_rank == rank:
             band = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
             ImageDraw.Draw(band).rectangle(
-                (SIDE_X0, ry0, SIDE_X1, ry1), fill=SIDE_HIGHLIGHT
+                (_SIDE_X0, by0 - 6, _SIDE_X1, by1 + 6),
+                fill=(255, 255, 255, 55),
             )
-            band.putalpha(
-                Image.composite(band.getchannel("A"),
-                                Image.new("L", canvas.size, 0), panel_mask)
-            )
-            overlay.alpha_composite(band)
+            canvas.paste(band, (0, 0), band)
 
-        # Hairline dividers between rows (skip the top edge).
-        for i in range(1, n):
-            ly = SIDE_Y0 + i * row_h
-            od.line(
-                [(SIDE_X0 + 18, ly), (SIDE_X1 - 18, ly)],
-                fill=SIDE_DIVIDER,
-                width=1,
-            )
+        # Small avatar at the left of the panel.
+        av_d = 40
+        av_x = _SIDE_X0 + 8
+        av = _avatar_with_ring(entry.avatar_bytes, av_d, (70, 50, 140))
+        canvas.paste(av, (av_x, cy - av_d // 2), av)
 
-        canvas.alpha_composite(overlay)
+        # Level tag, right-aligned.
+        level_img = _slanted_text(
+            f"Lv {entry.level}", _fonts.sans(20, weight=700), SIDE_LEVEL
+        )
+        level_right = _SIDE_X1 - 10
+        _paste_right_v_centre(canvas, level_img, level_right, cy)
 
-        # Row contents: small circular avatar, then the rank numeral, then
-        # the name. Names are deliberately small here so the column stays
-        # tidy next to the big podium pills.
-        pad_x = 18
-        av_d = min(int(row_h * 0.62), 52)
-        rank_font = self._fonts.sans(28, weight=700)
-        for i, entry in enumerate(side):
-            ry0 = SIDE_Y0 + i * row_h
-            cy = ry0 + row_h // 2
-
-            av_x = SIDE_X0 + pad_x
-            av_y = cy - av_d // 2
-            if entry.avatar_bytes is not None:
-                avatar = _circular(entry.avatar_bytes, av_d)
-            else:
-                avatar = _circle_placeholder(av_d, SIDE_TEXT[:3])
-            canvas.paste(avatar, (av_x, av_y), avatar)
-
-            # Rank numeral, in a fixed gutter after the avatar.
-            rank_img = _slanted_text(str(entry.rank), rank_font, SIDE_RANK_TEXT)
-            rank_gutter_x = av_x + av_d + 14
-            _paste_v_centre(canvas, rank_img, rank_gutter_x, cy)
-
-            text_x = rank_gutter_x + 44
-            max_w = (SIDE_X1 - pad_x) - text_x
-            name = _fit_name(
-                entry.display_name,
-                SIDE_TEXT,
-                max_w=max_w,
-                max_size=28,
-                min_size=16,
-                weight=700,
-            )
-            _paste_v_centre(canvas, name, text_x, cy)
+        # Name between avatar and level.
+        name_x = av_x + av_d + 8
+        name_max = (level_right - level_img.width - 10) - name_x
+        name = _fit_name(
+            entry.display_name,
+            SIDE_TEXT,
+            max_w=max(name_max, 30),
+            max_size=24,
+            min_size=13,
+            weight=720,
+        )
+        _paste_v_centre(canvas, name, name_x, cy)
