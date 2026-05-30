@@ -41,23 +41,27 @@ _FONT_SERIF_PATH = _ASSETS_DIR / "Fraunces-VariableFont.ttf"
 # Canvas + layout
 # ---------------------------------------------------------------------------
 CANVAS_W = 1200
-CANVAS_H = 1180
+CANVAS_H = 1200
 
 # Slant applied to all "italic" text (top leans right by SLANT * height).
 SLANT = 0.20
 
-# Pill bounding boxes (x0, y0, x1, y1) for ranks 1-3, in the staircase.
+# Pill bounding boxes (x0, y0, x1, y1) for ranks 1-3, traced from the
+# reference mock (270px → scaled ×4.44 to this 1200² canvas). 1st sits
+# upper-right and is the biggest; 2nd and 3rd step down on the left, 3rd
+# slightly narrower than 2nd.
 PILL_BOXES = {
-    1: (352, 206, 1060, 404),
-    2: (64, 440, 690, 598),
-    3: (64, 632, 604, 768),
+    1: (516, 245, 966, 466),
+    2: (248, 595, 742, 722),
+    3: (248, 748, 690, 875),
 }
 
-# Side panel (ranks 4-10).
-SIDE_X0 = 716
-SIDE_X1 = 1136
-SIDE_Y0 = 440
-SIDE_Y1 = 1132
+# Side panel (ranks 4-10) — a narrow tall column on the right that begins
+# at the 2nd pill's level and runs almost to the bottom edge.
+SIDE_X0 = 770
+SIDE_X1 = 1140
+SIDE_Y0 = 595
+SIDE_Y1 = 1150
 
 # ---------------------------------------------------------------------------
 # Palette
@@ -68,16 +72,17 @@ GRAD_SECOND = ((124, 100, 232), (72, 58, 166))    # indigo
 GRAD_THIRD = ((158, 128, 240), (101, 80, 198))    # lighter violet
 PILL_GRADS = {1: GRAD_FIRST, 2: GRAD_SECOND, 3: GRAD_THIRD}
 
-# Text on the pills.
-TEXT_ON_GOLD = (46, 28, 10)
-TEXT_ON_PURPLE = (255, 255, 255)
-PILL_TEXT = {1: TEXT_ON_GOLD, 2: TEXT_ON_PURPLE, 3: TEXT_ON_PURPLE}
+# Names are white on every pill (matches the reference).
+PILL_TEXT = {1: (255, 255, 255), 2: (255, 255, 255), 3: (255, 255, 255)}
+# Avatar ring colour per pill (a touch of the medal tone).
+PILL_RING = {1: (120, 74, 18), 2: (40, 28, 96), 3: (60, 44, 120)}
 
 # Side panel.
-SIDE_FILL = (123, 100, 190, 150)       # translucent violet block
-SIDE_DIVIDER = (255, 255, 255, 28)     # hairline between rows
-SIDE_HIGHLIGHT = (255, 255, 255, 60)   # viewer's row band
-SIDE_TEXT = (236, 229, 255)
+SIDE_FILL = (108, 84, 188, 235)        # solid violet block (matches mock)
+SIDE_DIVIDER = (255, 255, 255, 30)     # hairline between rows
+SIDE_HIGHLIGHT = (255, 255, 255, 64)   # viewer's row band
+SIDE_TEXT = (238, 232, 255)
+SIDE_RANK_TEXT = (210, 198, 245)       # dim rank numeral on each row
 
 # Highlight (viewer) accent.
 ACCENT_HIGHLIGHT = (255, 255, 255)
@@ -169,24 +174,27 @@ def _slanted_text(
     return sheared.crop(sheared.getbbox() or (0, 0, 1, 1))
 
 
-def _fit_serif(
+def _fit_name(
     text: str,
     fill: tuple[int, int, int],
     *,
     max_w: int,
     max_size: int,
     min_size: int,
-    weight: int = 600,
+    weight: int = 700,
 ) -> Image.Image:
-    """Slanted serif text shrunk to fit ``max_w``; ellipsised if needed."""
+    """Slanted bold sans name shrunk to fit ``max_w``; ellipsised if needed.
+
+    All names on the board (pills + side column) use the same Bricolage
+    sans face as the masthead, faux-italicised, to match the reference."""
     size = max_size
     while size >= min_size:
-        img = _slanted_text(text, _fonts.serif(size, weight=weight), fill)
+        img = _slanted_text(text, _fonts.sans(size, weight=weight), fill)
         if img.width <= max_w:
             return img
         size -= 3
     # Still too wide at the minimum size — truncate with an ellipsis.
-    font = _fonts.serif(min_size, weight=weight)
+    font = _fonts.sans(min_size, weight=weight)
     trimmed = text
     while trimmed and _slanted_text(trimmed + "…", font, fill).width > max_w:
         trimmed = trimmed[:-1]
@@ -340,9 +348,9 @@ class _Renderer:
     # -- title -----------------------------------------------------------
     def _draw_title(self, canvas: Image.Image) -> None:
         img = _slanted_text(
-            "leaderboard", self._fonts.sans(108, weight=800), TITLE_COLOR
+            "leaderboard", self._fonts.sans(104, weight=800), TITLE_COLOR
         )
-        canvas.paste(img, (60, 56), img)
+        canvas.paste(img, (52, 48), img)
 
     # -- podium pills ----------------------------------------------------
     def _draw_pill(self, canvas: Image.Image, entry: LeaderboardEntry) -> None:
@@ -393,22 +401,22 @@ class _Renderer:
         ring = Image.new("RGBA", (av_d, av_d), (0, 0, 0, 0))
         ImageDraw.Draw(ring).ellipse(
             (1, 1, av_d - 2, av_d - 2),
-            outline=PILL_TEXT[entry.rank] + (140,),
+            outline=PILL_RING[entry.rank] + (180,),
             width=3,
         )
         canvas.paste(ring, (av_x, av_y), ring)
 
-        # Display name (slanted serif), vertically centred after the avatar.
+        # Display name (slanted bold sans), vertically centred after avatar.
         text_x = av_x + av_d + int(h * 0.16)
         max_w = (x1 - text_x) - int(radius * 0.55)
-        max_size = {1: 104, 2: 80, 3: 70}[entry.rank]
-        name = _fit_serif(
+        max_size = {1: 96, 2: 76, 3: 68}[entry.rank]
+        name = _fit_name(
             entry.display_name,
             PILL_TEXT[entry.rank],
             max_w=max_w,
             max_size=max_size,
-            min_size=34,
-            weight=620,
+            min_size=32,
+            weight=780,
         )
         _paste_v_centre(canvas, name, text_x, cy)
 
@@ -467,18 +475,37 @@ class _Renderer:
 
         canvas.alpha_composite(overlay)
 
-        pad_x = 30
-        text_x = SIDE_X0 + pad_x
-        max_w = (SIDE_X1 - pad_x) - text_x
+        # Row contents: small circular avatar, then the rank numeral, then
+        # the name. Names are deliberately small here so the column stays
+        # tidy next to the big podium pills.
+        pad_x = 18
+        av_d = min(int(row_h * 0.62), 52)
+        rank_font = self._fonts.sans(28, weight=700)
         for i, entry in enumerate(side):
             ry0 = SIDE_Y0 + i * row_h
-            ry1 = ry0 + row_h
-            name = _fit_serif(
+            cy = ry0 + row_h // 2
+
+            av_x = SIDE_X0 + pad_x
+            av_y = cy - av_d // 2
+            if entry.avatar_bytes is not None:
+                avatar = _circular(entry.avatar_bytes, av_d)
+            else:
+                avatar = _circle_placeholder(av_d, SIDE_TEXT[:3])
+            canvas.paste(avatar, (av_x, av_y), avatar)
+
+            # Rank numeral, in a fixed gutter after the avatar.
+            rank_img = _slanted_text(str(entry.rank), rank_font, SIDE_RANK_TEXT)
+            rank_gutter_x = av_x + av_d + 14
+            _paste_v_centre(canvas, rank_img, rank_gutter_x, cy)
+
+            text_x = rank_gutter_x + 44
+            max_w = (SIDE_X1 - pad_x) - text_x
+            name = _fit_name(
                 entry.display_name,
                 SIDE_TEXT,
                 max_w=max_w,
-                max_size=44,
-                min_size=22,
-                weight=560,
+                max_size=28,
+                min_size=16,
+                weight=700,
             )
-            _paste_v_centre(canvas, name, text_x, (ry0 + ry1) // 2)
+            _paste_v_centre(canvas, name, text_x, cy)

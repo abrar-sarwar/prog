@@ -191,7 +191,7 @@ class UserCommands(commands.Cog):
             )
             return
 
-        # Avatars only show on the top-3 pills, so only those need fetching.
+        # Every row shows an avatar (pills + side column), so fetch all.
         async def _entry(idx: int, row) -> LeaderboardEntry:
             rank = idx + 1
             member = guild.get_member(row.user_id)
@@ -201,9 +201,7 @@ class UserCommands(commands.Cog):
                 else f"Unknown ({row.user_id})"
             )
             avatar_bytes = (
-                await _read_avatar(member)
-                if member is not None and rank <= 3
-                else None
+                await _read_avatar(member) if member is not None else None
             )
             return LeaderboardEntry(
                 rank=rank,
