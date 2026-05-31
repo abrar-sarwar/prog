@@ -76,6 +76,10 @@ class VoiceXP(commands.Cog):
         """Run the voice tick for a single guild."""
         async with get_session_factory()() as session:
             config = await crud.get_or_create_guild_config(session, guild.id)
+            # XP is opt-in per guild; skip the whole tick when it's off.
+            if not config.xp_enabled:
+                await session.commit()
+                return
             blacklist = {int(c) for c in config.xp_blacklist}
             level_up_channel_id = config.level_up_channel_id
             await session.commit()

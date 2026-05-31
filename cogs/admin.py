@@ -385,6 +385,68 @@ class Admin(commands.Cog):
     # ------------------------------------------------------------------
 
     @app_commands.command(
+        name="enable-xp",
+        description="Turn XP earning ON for this server",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def enable_xp(self, interaction: discord.Interaction) -> None:
+        """Enable XP earning (message + voice) for this guild."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            config = await crud.get_or_create_guild_config(
+                session, interaction.guild.id
+            )
+            already = config.xp_enabled
+            await crud.set_xp_enabled(session, interaction.guild.id, True)
+            level_up_channel_id = config.level_up_channel_id
+            await session.commit()
+
+        note = (
+            ""
+            if level_up_channel_id is not None
+            else "\n\nTip: set where level-up announcements post with "
+            "`/setup-levelup-channel`."
+        )
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="XP enabled" if not already else "XP already on",
+                description=(
+                    "Members now earn XP from messages and voice in this "
+                    f"server.{note}"
+                ),
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="disable-xp",
+        description="Turn XP earning OFF for this server",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def disable_xp(self, interaction: discord.Interaction) -> None:
+        """Disable XP earning (message + voice) for this guild."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            await crud.set_xp_enabled(session, interaction.guild.id, False)
+            await session.commit()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="XP disabled",
+                description=(
+                    "Members no longer earn XP here. Existing XP and levels "
+                    "are kept; run `/enable-xp` to resume."
+                ),
+                color=discord.Color.orange(),
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
         name="setup-roles",
         description="Assign a role to a level (level 0 = top-of-leaderboard role)",
     )
@@ -654,6 +716,13 @@ class Admin(commands.Cog):
         embed = discord.Embed(
             title=f"prog configuration — {guild.name}",
             color=discord.Color.blurple(),
+        )
+
+        # XP on/off — the master switch.
+        embed.add_field(
+            name="XP earning",
+            value="✅ **Enabled**" if config.xp_enabled else "⛔ **Disabled** (run `/enable-xp`)",
+            inline=False,
         )
 
         # Channels

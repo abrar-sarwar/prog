@@ -85,6 +85,12 @@ class GuildConfig(Base):
     __tablename__ = "guild_config"
 
     guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # XP is opt-in: a freshly-added guild starts with earning OFF until an
+    # admin runs /enable-xp (the migration flips existing guilds to True so
+    # servers already using the bot keep working).
+    xp_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     level_up_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     leaderboard_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     leaderboard_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

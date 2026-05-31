@@ -102,12 +102,27 @@ async def set_progsuvian_role(
     return config
 
 
+async def set_xp_enabled(
+    session: AsyncSession, guild_id: int, enabled: bool
+) -> GuildConfig:
+    """Turn XP earning on or off for a guild (the opt-in master switch)."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.xp_enabled = enabled
+    return config
+
+
 async def set_level_up_channel(
     session: AsyncSession, guild_id: int, channel_id: int | None
 ) -> GuildConfig:
-    """Set (or clear) the channel that level-up announcements are posted to."""
+    """Set (or clear) the channel that level-up announcements are posted to.
+
+    Also turns XP on for the guild: configuring where announcements go is one
+    of the ways an admin opts the server in (the dedicated toggle is
+    ``/enable-xp``)."""
     config = await get_or_create_guild_config(session, guild_id)
     config.level_up_channel_id = channel_id
+    if channel_id is not None:
+        config.xp_enabled = True
     return config
 
 

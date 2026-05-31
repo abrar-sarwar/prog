@@ -65,6 +65,11 @@ class MessageXP(commands.Cog):
         session_factory = get_session_factory()
         async with session_factory() as session:
             config = await crud.get_or_create_guild_config(session, guild_id)
+            # XP is opt-in per guild. If it's off, do nothing (but commit the
+            # get_or_create so the config row persists).
+            if not config.xp_enabled:
+                await session.commit()
+                return
             blacklist = {int(c) for c in config.xp_blacklist}
             if channel_id in blacklist:
                 await session.commit()  # commit the get_or_create
