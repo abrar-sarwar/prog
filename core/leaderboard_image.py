@@ -105,7 +105,7 @@ _PODIUM = {
 # Classic medal palette: gold / silver / bronze.
 RANK_COLORS: dict[int, tuple[int, int, int]] = {
     1: (255, 201, 92),    # gold
-    2: (208, 214, 232),   # silver
+    2: (188, 196, 224),   # silver (slightly cool-blue so it doesn't read grey)
     3: (214, 150, 92),    # bronze
 }
 
@@ -116,8 +116,13 @@ def _darken(c: tuple[int, int, int], f: float) -> tuple[int, int, int]:
 
 
 def _rank_gradient(rank: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """(left, right) gradient endpoints derived from the rank colour."""
+    """(left, right) gradient endpoints derived from the rank colour.
+
+    Silver is so light that the default 0.22 dark end still looks washed; it
+    gets a darker, slightly blued left end so the bar has real depth."""
     c = RANK_COLORS[rank]
+    if rank == 2:
+        return ((34, 38, 58), c)
     return (_darken(c, 0.22), c)
 
 
@@ -586,9 +591,11 @@ class _Renderer:
             canvas.paste(glow, (PILL_X0, y_top), glow)
 
         # Rank label, LEFT-aligned at the shared left margin (same x as the
-        # masthead), so title + "1st/2nd/3rd" form one vertical edge.
+        # masthead), drawn in the rank's own colour so the "1st/2nd/3rd"
+        # display ties to the pill gradient.
         ord_img = _slanted_text(
-            _ordinal(rank), _fonts.sans(cfg["rank_size"], weight=800), PILL_ORDINAL
+            _ordinal(rank), _fonts.sans(cfg["rank_size"], weight=800),
+            RANK_COLORS[rank],
         )
         _paste_v_centre(canvas, ord_img, PILL_RANK_X, cy)
 
