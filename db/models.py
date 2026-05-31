@@ -104,6 +104,12 @@ class GuildConfig(Base):
     role_multipliers: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
+    # Channel -> role bindings: ``{channel_id_str: role_id}``. The first
+    # qualifying message a member sends in a bound channel grants them the
+    # role (stacking + permanent; independent of whether XP is enabled).
+    channel_roles: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
 
 
 class RoleReward(Base):

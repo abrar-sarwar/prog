@@ -144,6 +144,36 @@ async def set_leaderboard_message(
     return config
 
 
+async def set_channel_role(
+    session: AsyncSession, guild_id: int, channel_id: int, role_id: int
+) -> None:
+    """Bind ``role_id`` to ``channel_id`` (overwrites any existing binding).
+
+    A member who sends a qualifying message in the channel is granted the
+    role on their first message there. Stored as ``{channel_id_str: role_id}``.
+    """
+    config = await get_or_create_guild_config(session, guild_id)
+    # Reassign (not mutate) so SQLAlchemy detects the JSONB change.
+    bindings = dict(config.channel_roles or {})
+    bindings[str(channel_id)] = role_id
+    config.channel_roles = bindings
+
+
+async def remove_channel_role(
+    session: AsyncSession, guild_id: int, channel_id: int
+) -> bool:
+    """Remove a channel's role binding. Returns True iff a binding existed.
+
+    Does NOT strip the role from members who already earned it.
+    """
+    config = await get_or_create_guild_config(session, guild_id)
+    bindings = dict(config.channel_roles or {})
+    existed = bindings.pop(str(channel_id), None) is not None
+    if existed:
+        config.channel_roles = bindings
+    return existed
+
+
 async def toggle_channel_blacklist(
     session: AsyncSession, guild_id: int, channel_id: int
 ) -> bool:

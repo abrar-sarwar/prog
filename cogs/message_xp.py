@@ -60,15 +60,21 @@ class MessageXP(commands.Cog):
         # This opens and commits its own session.
         await ensure_member_initialized(author)
 
-        # Step 2: blacklist + cooldown check + XP grant in a single transaction.
+        # Step 2: read the guild config once. We snapshot the channel->role
+        # binding and the XP-enabled flag here; channel roles are granted
+        # independently of XP (even when earning is off).
         now = datetime.now(timezone.utc)
         session_factory = get_session_factory()
         async with session_factory() as session:
             config = await crud.get_or_create_guild_config(session, guild_id)
-            # XP is opt-in per guild. If it's off, do nothing (but commit the
-            # get_or_create so the config row persists).
-            if not config.xp_enabled:
+            channel_role_id = (config.channel_roles or {}).get(str(channel_id))
+            xp_enabled = config.xp_enabled
+
+            # XP is opt-in per guild. If it's off, grant the channel role
+            # (if any) and stop — no XP work.
+            if not xp_enabled:
                 await session.commit()
+                await self._grant_channel_role(author, channel_role_id)
                 return
             blacklist = {int(c) for c in config.xp_blacklist}
             if channel_id in blacklist:
@@ -122,6 +128,9 @@ class MessageXP(commands.Cog):
             change.new_level,
         )
 
+        # Grant the channel->role binding (if any) for this channel.
+        await self._grant_channel_role(author, channel_role_id)
+
         # Every successful grant invalidates the leaderboard cache. The
         # leaderboard cog debounces these and only edits Discord when the
         # rendered top-N actually differs.
@@ -143,6 +152,46 @@ class MessageXP(commands.Cog):
             # roles can be reassigned.
             self.bot.dispatch(
                 "level_change", author, change.old_level, change.new_level
+            )
+
+    async def _grant_channel_role(
+        self, member: discord.Member, role_id: int | None
+    ) -> None:
+        """Give ``member`` the channel-bound role if they don't have it.
+
+        Channel roles stack and are permanent — we only ever add, never
+        remove, and skip when the member already has it. Idempotent: Discord
+        role membership is the state, so no DB write is needed per grant.
+        """
+        if role_id is None:
+            return
+        role = member.guild.get_role(role_id)
+        if role is None:
+            log.warning(
+                "channel role id=%s configured in guild %s but not found "
+                "(deleted, or stale /setup-channel-role binding)",
+                role_id,
+                member.guild.id,
+            )
+            return
+        if role in member.roles:
+            return
+        try:
+            await member.add_roles(role, reason="prog: channel role")
+        except discord.Forbidden:
+            log.error(
+                "channel role: FORBIDDEN adding %s (id=%s) to %s. Move prog's "
+                "role above it in Server Settings -> Roles.",
+                role.name,
+                role.id,
+                member.id,
+            )
+        except discord.HTTPException as exc:
+            log.warning(
+                "channel role: HTTP error adding %s to %s: %s",
+                role.id,
+                member.id,
+                exc,
             )
 
     async def _announce_level_up(

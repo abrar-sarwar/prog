@@ -616,6 +616,79 @@ class Admin(commands.Cog):
         )
 
     @app_commands.command(
+        name="setup-channel-role",
+        description="Give a role to anyone who talks in a channel",
+    )
+    @app_commands.describe(
+        channel="Channel that grants the role",
+        role="Role to grant on the member's first message there",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def setup_channel_role(
+        self,
+        interaction: discord.Interaction,
+        channel: GuildTextish,
+        role: discord.Role,
+    ) -> None:
+        """Bind a role to a channel; members earn it by speaking there."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            await crud.set_channel_role(
+                session, interaction.guild.id, channel.id, role.id
+            )
+            await session.commit()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Channel role set",
+                description=(
+                    f"Anyone who sends a message in {channel.mention} will be "
+                    f"given {role.mention}. The role stacks and is permanent.\n\n"
+                    "Make sure prog's role is **above** "
+                    f"{role.mention} in Server Settings → Roles."
+                ),
+                color=discord.Color.blurple(),
+            )
+        )
+
+    @app_commands.command(
+        name="remove-channel-role",
+        description="Stop a channel from granting its role",
+    )
+    @app_commands.describe(channel="Channel to unbind")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def remove_channel_role(
+        self,
+        interaction: discord.Interaction,
+        channel: GuildTextish,
+    ) -> None:
+        """Remove a channel's role binding (doesn't strip earned roles)."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            existed = await crud.remove_channel_role(
+                session, interaction.guild.id, channel.id
+            )
+            await session.commit()
+        if existed:
+            desc = (
+                f"{channel.mention} no longer grants a role. Members who "
+                "already earned it keep it."
+            )
+            color = discord.Color.orange()
+        else:
+            desc = f"{channel.mention} had no role binding."
+            color = discord.Color.greyple()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Channel role removed", description=desc, color=color
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
         name="set-channel-multiplier",
         description="Set XP multiplier for a channel (1.0 to remove)",
     )
@@ -788,6 +861,20 @@ class Admin(commands.Cog):
         else:
             embed.add_field(
                 name="Role multipliers", value="_(none)_", inline=False
+            )
+
+        # Channel roles (talk-here-get-this-role)
+        if config.channel_roles:
+            lines = [
+                f"{_format_channel(guild, int(cid))} → {_format_role(guild, int(rid))}"
+                for cid, rid in config.channel_roles.items()
+            ]
+            embed.add_field(
+                name="Channel roles", value="\n".join(lines), inline=False
+            )
+        else:
+            embed.add_field(
+                name="Channel roles", value="_(none)_", inline=False
             )
 
         # Blacklist
