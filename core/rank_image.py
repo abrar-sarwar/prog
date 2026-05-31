@@ -40,7 +40,6 @@ from core.leaderboard_image import (
     TEXT_DIM,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
-    make_atmospheric_background,
 )
 from core.leveling import (
     LEVEL_CAP,
@@ -57,6 +56,14 @@ from core.leveling import (
 _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 _FONT_SANS_PATH = _ASSETS_DIR / "BricolageGrotesque-VariableFont.ttf"
 _FONT_SERIF_PATH = _ASSETS_DIR / "Fraunces-VariableFont.ttf"
+# Every text on the /rank card is Helvetica Neue Bold Italic. The .ttc is
+# bundled in assets/fonts (index 3 = Bold Italic) so the renderer is
+# portable; falls back to the system copy, then Bricolage.
+_FONT_HELV_PATHS = [
+    _ASSETS_DIR / "HelveticaNeue.ttc",
+    Path("/System/Library/Fonts/HelveticaNeue.ttc"),
+]
+_FONT_HELV_BOLD_ITALIC_INDEX = 3
 
 
 # ---------------------------------------------------------------------------
@@ -157,41 +164,7 @@ class _RankRenderer:
         self._fonts: dict[str, ImageFont.FreeTypeFont] = {}
 
     def render(self) -> bytes:
-        # Tier-tinted atmospheric background — three orbs, one of which
-        # is the accent colour so each card has a unique mood.
-        canvas = make_atmospheric_background(
-            CANVAS_W,
-            CANVAS_H,
-            orbs=[
-                # Accent-tinted top-left orb (the card's personality).
-                (
-                    int(CANVAS_W * 0.04),
-                    int(CANVAS_H * 0.08),
-                    int(CANVAS_W * 0.50),
-                    self.accent,
-                    78,
-                    150,
-                ),
-                # Magenta lower-right haze.
-                (
-                    int(CANVAS_W * 1.02),
-                    int(CANVAS_H * 0.95),
-                    int(CANVAS_W * 0.55),
-                    (244, 114, 182),
-                    52,
-                    180,
-                ),
-                # Deep violet centre to anchor the eye.
-                (
-                    int(CANVAS_W * 0.50),
-                    int(CANVAS_H * 0.55),
-                    int(CANVAS_W * 0.30),
-                    (90, 60, 160),
-                    35,
-                    200,
-                ),
-            ],
-        )
+        canvas = self._make_background()
 
         self._draw_top_stripe(canvas)
         # _draw_hero internally calls _draw_stats_column for the right side.
@@ -202,35 +175,77 @@ class _RankRenderer:
         canvas.convert("RGB").save(buf, format="PNG", optimize=True)
         return buf.getvalue()
 
+    # ---------- background ----------
+
+    def _make_background(self) -> Image.Image:
+        """Vertical gradient DERIVED from the member's tier/rank colour.
+
+        A deep, desaturated take on the tier accent at the top fades down to
+        near-black at the bottom, then two soft tier-tinted orbs add glow —
+        so the whole card is washed in the member's rank colour."""
+        w, h = CANVAS_W, CANVAS_H
+        a = self.accent
+        top = (int(a[0] * 0.30 + 10), int(a[1] * 0.30 + 6), int(a[2] * 0.30 + 14))
+        bottom = (int(a[0] * 0.06 + 8), int(a[1] * 0.06 + 5), int(a[2] * 0.06 + 12))
+        column = Image.new("RGB", (1, h))
+        cpx = column.load()
+        for y in range(h):
+            t = y / max(h - 1, 1)
+            t2 = t * t * (3 - 2 * t)  # smoothstep
+            cpx[0, y] = (
+                int(top[0] + (bottom[0] - top[0]) * t2),
+                int(top[1] + (bottom[1] - top[1]) * t2),
+                int(top[2] + (bottom[2] - top[2]) * t2),
+            )
+        base = column.resize((w, h)).convert("RGBA")
+
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        for cx, cy, r, alpha in (
+            (int(w * 0.06), int(h * 0.10), int(w * 0.52), 80),
+            (int(w * 1.0), int(h * 0.92), int(w * 0.52), 58),
+        ):
+            od.ellipse((cx - r, cy - r, cx + r, cy + r), fill=a + (alpha,))
+        overlay = overlay.filter(ImageFilter.GaussianBlur(200))
+        return Image.alpha_composite(base, overlay)
+
     # ---------- fonts ----------
 
-    def _sans(self, size: int, weight: int = 600) -> ImageFont.FreeTypeFont:
-        key = f"sans:{size}:{weight}"
+    def _helvetica(self, size: int) -> ImageFont.FreeTypeFont:
+        """Helvetica Neue Bold Italic at ``size`` (cached)."""
+        key = f"helv:{size}"
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
-        font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
-        try:
-            font.set_variation_by_axes([weight, 100, min(max(size, 12), 96)])
-        except Exception:
-            pass
+        font: ImageFont.FreeTypeFont | None = None
+        for path in _FONT_HELV_PATHS:
+            if path.exists():
+                try:
+                    font = ImageFont.truetype(
+                        str(path), size=size,
+                        index=_FONT_HELV_BOLD_ITALIC_INDEX,
+                    )
+                    break
+                except Exception:
+                    continue
+        if font is None:
+            # Fallback so rendering never crashes if the .ttc is missing.
+            font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
+            try:
+                font.set_variation_by_axes([800, 100, min(max(size, 12), 96)])
+            except Exception:
+                pass
         self._fonts[key] = font
         return font
 
+    # Every text element uses one face: Helvetica Neue Bold Italic.
+    # ``_sans``/``_serif`` keep their names (and ignore ``weight``) so the
+    # many call sites don't change.
+    def _sans(self, size: int, weight: int = 600) -> ImageFont.FreeTypeFont:
+        return self._helvetica(size)
+
     def _serif(self, size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
-        key = f"serif:{size}:{weight}"
-        cached = self._fonts.get(key)
-        if cached is not None:
-            return cached
-        font = ImageFont.truetype(str(_FONT_SERIF_PATH), size=size)
-        try:
-            font.set_variation_by_axes(
-                [min(max(size, 9), 144), weight, 0, 0]
-            )
-        except Exception:
-            pass
-        self._fonts[key] = font
-        return font
+        return self._helvetica(size)
 
     # ---------- top stripe ----------
 

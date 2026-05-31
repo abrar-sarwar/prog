@@ -27,15 +27,6 @@ _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 _FONTS_DIR = _ASSETS_DIR / "fonts"
 _FONT_SANS_PATH = _FONTS_DIR / "BricolageGrotesque-VariableFont.ttf"
 _FONT_SERIF_PATH = _FONTS_DIR / "Fraunces-VariableFont.ttf"
-# Every text on the leaderboard uses Helvetica Neue Bold Italic. The .ttc is
-# bundled in assets/fonts so the renderer is portable (the server has no
-# macOS system fonts); index 3 is the Bold Italic face. Fall back to the
-# system copy, then to Bricolage, if the bundled file is unavailable.
-_FONT_HELV_PATHS = [
-    _FONTS_DIR / "HelveticaNeue.ttc",
-    Path("/System/Library/Fonts/HelveticaNeue.ttc"),
-]
-_FONT_HELV_BOLD_ITALIC_INDEX = 3
 # The original design — used only for its background (a clean full-height
 # strip from the right edge is stretched across the canvas, so none of the
 # template's own pills/text bleed through).
@@ -47,9 +38,8 @@ _TEMPLATE_PATH = _ASSETS_DIR / "leaderboard_template.png"
 CANVAS_W = 1080
 CANVAS_H = 1080
 
-# Helvetica Neue Bold Italic is a *real* italic, so no faux shear is needed
-# (a non-zero value would double-slant the glyphs).
-SLANT = 0.0
+# Faux-italic shear applied to all text (matches the design's oblique).
+SLANT = 0.20
 
 # Masthead. LEFT_MARGIN is the shared left edge for the title and the podium
 # rank labels, giving a strong vertical alignment line down the left.
@@ -92,38 +82,15 @@ _PODIUM_GAP = 30           # constant vertical gap between pills
 # pills from looking stubby; the pill grows past it to fit longer names.
 _PODIUM = {
     1: {"height": 224, "name_size": 150, "rank_size": 75,
-        "level_size": 45, "min_w": 660},
+        "level_size": 45, "min_w": 660,
+        "grad": ((58, 42, 28), (255, 201, 92))},      # gold
     2: {"height": 192, "name_size": 118, "rank_size": 59,
-        "level_size": 35, "min_w": 560},
+        "level_size": 35, "min_w": 560,
+        "grad": ((40, 27, 58), (140, 83, 240))},      # indigo
     3: {"height": 172, "name_size": 92, "rank_size": 46,
-        "level_size": 28, "min_w": 520},
+        "level_size": 28, "min_w": 520,
+        "grad": ((58, 44, 76), (176, 141, 230))},     # lighter violet
 }
-
-# Each rank has a signature colour; the pill gradient is DERIVED from it (a
-# dark, near-black version that fades in on the left up to the full bright
-# colour on the right), and the rank label is drawn in the same colour.
-# Classic medal palette: gold / silver / bronze.
-RANK_COLORS: dict[int, tuple[int, int, int]] = {
-    1: (255, 201, 92),    # gold
-    2: (188, 196, 224),   # silver (slightly cool-blue so it doesn't read grey)
-    3: (214, 150, 92),    # bronze
-}
-
-
-def _darken(c: tuple[int, int, int], f: float) -> tuple[int, int, int]:
-    """Scale an RGB colour toward black by factor ``f`` (0=black, 1=same)."""
-    return (int(c[0] * f), int(c[1] * f), int(c[2] * f))
-
-
-def _rank_gradient(rank: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """(left, right) gradient endpoints derived from the rank colour.
-
-    Silver is so light that the default 0.22 dark end still looks washed; it
-    gets a darker, slightly blued left end so the bar has real depth."""
-    c = RANK_COLORS[rank]
-    if rank == 2:
-        return ((34, 38, 58), c)
-    return (_darken(c, 0.22), c)
 
 
 def _podium_y_top(rank: int) -> int:
@@ -165,37 +132,32 @@ class _FontBook:
         self._fonts: dict[str, ImageFont.FreeTypeFont] = {}
 
     def sans(self, size: int, weight: int = 800) -> ImageFont.FreeTypeFont:
-        # Every leaderboard text is Helvetica Neue Bold Italic. ``weight`` is
-        # ignored (the face is already bold); kept in the signature so call
-        # sites don't change.
-        key = f"helv:{size}"
+        # Bricolage axes in fvar order: [Optical size, Weight, Width].
+        key = f"sans:{size}:{weight}"
         cached = self._fonts.get(key)
         if cached is not None:
             return cached
-        font = self._load_helvetica(size)
+        font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
+        try:
+            font.set_variation_by_axes(
+                [min(max(size, 12), 96), max(min(weight, 800), 200), 100]
+            )
+        except Exception:
+            pass
         self._fonts[key] = font
         return font
 
-    # Serif callers fall through to the same Helvetica Neue Bold Italic so
-    # the whole card is one typeface.
-    serif = sans
-
-    def _load_helvetica(self, size: int) -> ImageFont.FreeTypeFont:
-        for path in _FONT_HELV_PATHS:
-            if path.exists():
-                try:
-                    return ImageFont.truetype(
-                        str(path), size=size,
-                        index=_FONT_HELV_BOLD_ITALIC_INDEX,
-                    )
-                except Exception:
-                    continue
-        # Last-resort fallback so rendering never crashes.
-        font = ImageFont.truetype(str(_FONT_SANS_PATH), size=size)
+    def serif(self, size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
+        key = f"serif:{size}:{weight}"
+        cached = self._fonts.get(key)
+        if cached is not None:
+            return cached
+        font = ImageFont.truetype(str(_FONT_SERIF_PATH), size=size)
         try:
-            font.set_variation_by_axes([min(max(size, 12), 96), 800, 100])
+            font.set_variation_by_axes([min(max(size, 9), 144), weight, 0, 0])
         except Exception:
             pass
+        self._fonts[key] = font
         return font
 
 
@@ -579,8 +541,7 @@ class _Renderer:
         # runs out roughly where the avatar begins, so the rank label to its
         # left reads against the dark background.
         fade_w = av_x
-        grad_left, grad_right = _rank_gradient(rank)
-        pill = _fade_left_capsule(pill_w, h, grad_left, grad_right, fade_w)
+        pill = _fade_left_capsule(pill_w, h, cfg["grad"][0], cfg["grad"][1], fade_w)
         canvas.paste(pill, (PILL_X0, y_top), pill)
 
         if self.highlight_rank == rank:
@@ -591,11 +552,9 @@ class _Renderer:
             canvas.paste(glow, (PILL_X0, y_top), glow)
 
         # Rank label, LEFT-aligned at the shared left margin (same x as the
-        # masthead), drawn in the rank's own colour so the "1st/2nd/3rd"
-        # display ties to the pill gradient.
+        # masthead), so title + "1st/2nd/3rd" form one vertical edge.
         ord_img = _slanted_text(
-            _ordinal(rank), _fonts.sans(cfg["rank_size"], weight=800),
-            RANK_COLORS[rank],
+            _ordinal(rank), _fonts.sans(cfg["rank_size"], weight=800), PILL_ORDINAL
         )
         _paste_v_centre(canvas, ord_img, PILL_RANK_X, cy)
 
