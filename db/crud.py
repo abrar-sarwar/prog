@@ -286,6 +286,23 @@ async def get_or_create_user(
     return fresh
 
 
+async def set_saved_roles(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    role_ids: list[int],
+) -> User:
+    """Store the role IDs a member had at departure, for restore on rejoin.
+
+    Get-or-creates the user row (a member can leave before ever earning XP) and
+    reassigns ``saved_role_ids`` so SQLAlchemy detects the JSONB change. Caller
+    commits.
+    """
+    user = await get_or_create_user(session, guild_id, user_id)
+    user.saved_role_ids = list(role_ids)
+    return user
+
+
 async def _lock_user(
     session: AsyncSession, guild_id: int, user_id: int
 ) -> User:

@@ -69,6 +69,12 @@ class User(Base):
     """One-shot flag for the level-100 Aura announcement. Once set, the
     Aura message will never re-fire for this (guild, user), even if the
     user drops below 100 and climbs back."""
+    saved_role_ids: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    """Role IDs the member had at their last departure from the guild, captured
+    by ``on_member_remove`` and re-applied on rejoin. Excludes unassignable and
+    dangerous-permission roles (see :mod:`core.roles`)."""
 
 
 class GuildConfig(Base):
