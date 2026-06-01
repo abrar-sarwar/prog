@@ -972,6 +972,11 @@ class Admin(commands.Cog):
         embed.add_field(name="Channels", value="\n".join(ch_lines), inline=False)
 
         # Welcome-on-join
+        is_custom = config.welcome_message is not None
+        welcome_text = config.welcome_message or DEFAULT_WELCOME_MESSAGE
+        # Embed field values cap at 1024 chars; leave room for the code fence.
+        if len(welcome_text) > 950:
+            welcome_text = welcome_text[:950] + "…"
         welcome_lines = [
             f"Channel: {_format_channel(guild, config.welcome_channel_id)}"
             + (
@@ -980,8 +985,8 @@ class Admin(commands.Cog):
                 else " _(disabled — run `/setup-welcome-channel`)_"
             ),
             f"Intro channel: {_format_channel(guild, config.welcome_intro_channel_id)}",
-            "Message: "
-            + ("**custom**" if config.welcome_message is not None else "_default_"),
+            "Message " + ("(**custom**):" if is_custom else "(_default_):"),
+            f"```\n{welcome_text}\n```",
         ]
         embed.add_field(
             name="Welcome on join", value="\n".join(welcome_lines), inline=False
