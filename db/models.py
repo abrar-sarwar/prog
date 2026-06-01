@@ -20,6 +20,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Integer,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -110,6 +111,15 @@ class GuildConfig(Base):
     channel_roles: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
+    # Welcome-on-join. The feature is opt-in: a welcome message is only posted
+    # once ``welcome_channel_id`` is set. ``welcome_intro_channel_id`` is the
+    # target of the ``{intro_channel}`` placeholder; ``welcome_message`` is the
+    # per-guild override (NULL = use core.welcome.DEFAULT_WELCOME_MESSAGE).
+    welcome_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    welcome_intro_channel_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    welcome_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RoleReward(Base):

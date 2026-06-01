@@ -41,6 +41,7 @@ from core.leveling import (
     admin_rank_change_action,
     get_level_message,
 )
+from core.welcome import DEFAULT_WELCOME_MESSAGE
 from db import crud
 from db.engine import get_session_factory
 
@@ -81,6 +82,49 @@ def _format_channel(guild: discord.Guild, channel_id: int | None) -> str:
         return "_not set_"
     channel = guild.get_channel(channel_id)
     return channel.mention if channel is not None else f"_unknown channel ({channel_id})_"
+
+
+class WelcomeMessageModal(discord.ui.Modal, title="Edit welcome message"):
+    """Multi-line editor for a guild's welcome message.
+
+    Prefilled with the guild's current message (or the default). Submitting an
+    empty field clears the override so the default template is used again.
+    Available placeholders: ``{user}``, ``{server}``, ``{intro_channel}``.
+    """
+
+    def __init__(self, guild_id: int, current: str) -> None:
+        super().__init__()
+        self.guild_id = guild_id
+        self.message_input: discord.ui.TextInput = discord.ui.TextInput(
+            label="Welcome message",
+            style=discord.TextStyle.paragraph,
+            default=current,
+            required=False,
+            max_length=1500,
+            placeholder="Use {user}, {server} and {intro_channel} placeholders…",
+        )
+        self.add_item(self.message_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Persist the edited message (or clear it when left empty)."""
+        new_value = self.message_input.value.strip()
+        message = new_value or None
+        async with get_session_factory()() as session:
+            await crud.set_welcome_message(session, self.guild_id, message)
+            await session.commit()
+        desc = (
+            "Welcome message reset to the default."
+            if message is None
+            else "Welcome message updated."
+        )
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Welcome message",
+                description=desc,
+                color=discord.Color.blurple(),
+            ),
+            ephemeral=True,
+        )
 
 
 class Admin(commands.Cog):
@@ -584,6 +628,126 @@ class Admin(commands.Cog):
         )
 
     @app_commands.command(
+        name="setup-welcome-channel",
+        description="Set where welcome messages post when members join (opts in)",
+    )
+    @app_commands.describe(channel="Channel for welcome-on-join messages")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def setup_welcome_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+    ) -> None:
+        """Set the welcome channel; presence of one enables welcome-on-join."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            config = await crud.get_or_create_guild_config(
+                session, interaction.guild.id
+            )
+            has_custom = config.welcome_message is not None
+            await crud.set_welcome_channel(
+                session, interaction.guild.id, channel.id
+            )
+            await session.commit()
+        note = (
+            ""
+            if has_custom
+            else "\n\nUsing the default message — customise it with "
+            "`/setup-welcome-message`, and set the intro link with "
+            "`/setup-intro-channel`."
+        )
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Welcome channel set",
+                description=(
+                    f"New members will be welcomed in {channel.mention}.{note}"
+                ),
+                color=discord.Color.blurple(),
+            )
+        )
+
+    @app_commands.command(
+        name="setup-intro-channel",
+        description="Set the channel the {intro_channel} placeholder links to",
+    )
+    @app_commands.describe(channel="The 'introduce yourself' channel")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def setup_intro_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+    ) -> None:
+        """Set the channel referenced by ``{intro_channel}`` in the welcome."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            await crud.set_welcome_intro_channel(
+                session, interaction.guild.id, channel.id
+            )
+            await session.commit()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Intro channel set",
+                description=(
+                    f"The `{{intro_channel}}` placeholder now links to "
+                    f"{channel.mention}."
+                ),
+                color=discord.Color.blurple(),
+            )
+        )
+
+    @app_commands.command(
+        name="setup-welcome-message",
+        description="Edit the welcome message shown when members join",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def setup_welcome_message(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Open a modal to edit the welcome message (prefilled with current)."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            config = await crud.get_or_create_guild_config(
+                session, interaction.guild.id
+            )
+            current = config.welcome_message or DEFAULT_WELCOME_MESSAGE
+            await session.commit()
+        await interaction.response.send_modal(
+            WelcomeMessageModal(interaction.guild.id, current)
+        )
+
+    @app_commands.command(
+        name="disable-welcome",
+        description="Stop posting welcome messages (keeps your saved text)",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def disable_welcome(self, interaction: discord.Interaction) -> None:
+        """Clear the welcome channel, turning the feature off."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            await crud.set_welcome_channel(session, interaction.guild.id, None)
+            await session.commit()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Welcome disabled",
+                description=(
+                    "New members will no longer be welcomed. Your saved "
+                    "welcome message is kept — run `/setup-welcome-channel` "
+                    "to turn it back on."
+                ),
+                color=discord.Color.orange(),
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
         name="blacklist-channel",
         description="Toggle a channel's XP-blacklist status",
     )
@@ -806,6 +970,22 @@ class Admin(commands.Cog):
         if config.leaderboard_message_id is not None:
             ch_lines.append(f"_(message id: `{config.leaderboard_message_id}`)_")
         embed.add_field(name="Channels", value="\n".join(ch_lines), inline=False)
+
+        # Welcome-on-join
+        welcome_lines = [
+            f"Channel: {_format_channel(guild, config.welcome_channel_id)}"
+            + (
+                ""
+                if config.welcome_channel_id is not None
+                else " _(disabled — run `/setup-welcome-channel`)_"
+            ),
+            f"Intro channel: {_format_channel(guild, config.welcome_intro_channel_id)}",
+            "Message: "
+            + ("**custom**" if config.welcome_message is not None else "_default_"),
+        ]
+        embed.add_field(
+            name="Welcome on join", value="\n".join(welcome_lines), inline=False
+        )
 
         # Progsuvian base role
         embed.add_field(

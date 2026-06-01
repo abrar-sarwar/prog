@@ -126,6 +126,38 @@ async def set_level_up_channel(
     return config
 
 
+async def set_welcome_channel(
+    session: AsyncSession, guild_id: int, channel_id: int | None
+) -> GuildConfig:
+    """Set (or clear, with None) the channel welcome messages are posted to.
+
+    Setting a channel opts the guild into welcome-on-join; clearing it (None)
+    turns the feature off while keeping any saved welcome message text."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.welcome_channel_id = channel_id
+    return config
+
+
+async def set_welcome_intro_channel(
+    session: AsyncSession, guild_id: int, channel_id: int | None
+) -> GuildConfig:
+    """Set (or clear) the channel the ``{intro_channel}`` placeholder links to."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.welcome_intro_channel_id = channel_id
+    return config
+
+
+async def set_welcome_message(
+    session: AsyncSession, guild_id: int, message: str | None
+) -> GuildConfig:
+    """Set (or clear) the per-guild welcome message override.
+
+    ``None`` clears the override so the default template is used again."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.welcome_message = message
+    return config
+
+
 async def set_leaderboard_channel(
     session: AsyncSession, guild_id: int, channel_id: int | None
 ) -> GuildConfig:
