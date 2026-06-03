@@ -600,6 +600,14 @@ class Leet(commands.Cog):
             ),
             color=discord.Color.blurple(),
         )
+        embed.add_field(
+            name="DISCLAIMER",
+            value=(
+                "you won't be monitored if you used AI or not, please keep in mind "
+                "that you are responsible of your own education"
+            ),
+            inline=False,
+        )
         try:
             await thread.send(
                 content=(
