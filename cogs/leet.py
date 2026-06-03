@@ -164,6 +164,61 @@ class _StillHereView(discord.ui.View):
         self.stop()
 
 
+class _ReverifyConfirmView(discord.ui.View):
+    """Shown when an already-verified user runs /leetverify.
+
+    'yes' keeps the existing link; 'no, reverify' re-runs the full code flow
+    (against the username they passed to the command).
+    """
+
+    def __init__(
+        self,
+        cog: "Leet",
+        user_id: int,
+        stored_username: str,
+        requested_username: str,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.user_id = user_id
+        self.stored_username = stored_username
+        self.requested_username = requested_username
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "this isn't your verification.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="yes", style=discord.ButtonStyle.green)
+    async def yes(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not await self._guard(interaction):
+            return
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(
+            f"all good, still linked to **{self.stored_username}**.", ephemeral=True
+        )
+        self.stop()
+
+    @discord.ui.button(label="no, reverify", style=discord.ButtonStyle.secondary)
+    async def no(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not await self._guard(interaction):
+            return
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        await interaction.response.edit_message(view=self)
+        await self.cog._start_verify_flow(interaction, self.requested_username)
+        self.stop()
+
+
 # ---------------------------------------------------------------------------
 # Cog
 # ---------------------------------------------------------------------------
@@ -379,11 +434,45 @@ class Leet(commands.Cog):
         interaction: discord.Interaction,
         leetcode_username: str,
     ) -> None:
-        """Start the bio-code verification flow for a LeetCode account."""
+        """Link a LeetCode account, or confirm/re-link if already verified."""
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        username = leetcode_username.strip().lstrip("@")
+        # Verify-once: if they already have a link, don't re-run the flow —
+        # confirm it's still their account, with a reverify escape hatch.
+        async with get_session_factory()() as session:
+            link = await crud.get_leetcode_link(session, interaction.user.id)
+            await session.commit()
+        if link is not None:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="leetcode verified",
+                    description=(
+                        f"is your user still **{link.leetcode_username}**?"
+                    ),
+                    color=discord.Color.blurple(),
+                ),
+                view=_ReverifyConfirmView(
+                    self,
+                    interaction.user.id,
+                    link.leetcode_username,
+                    leetcode_username,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        await self._start_verify_flow(interaction, leetcode_username)
+
+    async def _start_verify_flow(
+        self, interaction: discord.Interaction, raw_username: str
+    ) -> None:
+        """Validate the username and post the code + steps + verify button.
+
+        Shared by first-time /leetverify and the reverify button. The caller
+        must have already deferred/responded to ``interaction`` so followups send.
+        """
+        username = raw_username.strip().lstrip("@")
         if not username:
             await interaction.followup.send(
                 "give me your leetcode username, e.g. `/leetverify uwi`.",
@@ -422,10 +511,11 @@ class Leet(commands.Cog):
         code = generate_verification_code()
         view = _VerifyView(interaction.user.id, profile.username, code)
         embed = discord.Embed(
-            title="one step to link your leetcode",
+            title="link your leetcode",
             description=(
                 f"1. open your leetcode profile edit page\n"
-                f"2. put this code anywhere in your **bio / summary**:\n\n"
+                f"2. scroll down til you see readme, click on it and put the "
+                f"following code:\n\n"
                 f"**`{code}`**\n\n"
                 f"3. save it, then hit the button below\n\n"
                 f"linking **{profile.username}**. you can delete the code right "
