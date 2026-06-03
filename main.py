@@ -48,6 +48,7 @@ COGS: list[str] = [
     "cogs.commands",
     "cogs.admin",
     "cogs.leaderboard_channel",
+    "cogs.leet",
 ]
 
 
