@@ -938,7 +938,18 @@ class Leet(commands.Cog):
 
     @tasks.loop(seconds=LEET_GRANT_SWEEP_SECONDS)
     async def grant_sweep(self) -> None:
-        """Remove reward roles whose 24h grant has expired."""
+        """Remove reward roles whose 24h grant has expired.
+
+        Wrapped so a transient DB error (e.g. a pooler hiccup) is logged and the
+        loop survives to the next tick — an unhandled exception would otherwise
+        stop the loop for the process's lifetime.
+        """
+        try:
+            await self._sweep_expired_grants()
+        except Exception:
+            log.exception("leet grant_sweep tick failed; will retry next tick")
+
+    async def _sweep_expired_grants(self) -> None:
         now = datetime.now(timezone.utc)
         async with get_session_factory()() as session:
             expired = list(await crud.list_expired_role_grants(session, now))
