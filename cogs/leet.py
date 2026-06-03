@@ -419,6 +419,59 @@ class Leet(commands.Cog):
             ephemeral=True,
         )
 
+    @app_commands.command(
+        name="leet-stats",
+        description="List members who've completed /leet problems and their stats",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def leet_stats(self, interaction: discord.Interaction) -> None:
+        """Admin engagement view: who's done /leet, sorted by total solved."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        async with get_session_factory()() as session:
+            participants = list(
+                await crud.list_leet_participants(session, guild.id, limit=25)
+            )
+            total = await crud.count_leet_participants(session, guild.id)
+            await session.commit()
+
+        if not participants:
+            await interaction.followup.send(
+                "nobody's completed a `/leet` problem yet.", ephemeral=True
+            )
+            return
+
+        lines = []
+        for i, u in enumerate(participants, start=1):
+            member = guild.get_member(u.user_id)
+            name = member.mention if member is not None else f"`{u.user_id}`"
+            last = (
+                u.leetcode_last_solve_date.isoformat()
+                if u.leetcode_last_solve_date is not None
+                else "never"
+            )
+            lines.append(
+                f"{i}. {name}: **{u.leetcode_solved_total}** solved, "
+                f"{u.leetcode_streak}d streak, last solve {last}"
+            )
+
+        embed = discord.Embed(
+            title="leetcode participation",
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(
+            text=(
+                f"{total} member(s) total"
+                + (f", showing top {len(participants)}" if total > len(participants) else "")
+            )
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # ------------------------------------------------------------------
     # /leetverify
     # ------------------------------------------------------------------

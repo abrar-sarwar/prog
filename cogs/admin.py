@@ -1076,6 +1076,18 @@ class Admin(commands.Cog):
                 name="Blacklisted channels", value="_(none)_", inline=False
             )
 
+        # LeetCode (/leet feature)
+        leet_lines = [
+            f"Channel: {_format_channel(guild, config.leetcode_channel_id)}"
+            + (
+                ""
+                if config.leetcode_channel_id is not None
+                else " _(not set — run `/setup-leet`)_"
+            ),
+            f"Reward role: {_format_role(guild, config.leetcode_reward_role_id)}",
+        ]
+        embed.add_field(name="LeetCode (/leet)", value="\n".join(leet_lines), inline=False)
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------

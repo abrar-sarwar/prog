@@ -891,3 +891,36 @@ async def delete_role_grant(session: AsyncSession, grant_id: int) -> None:
     grant = await session.get(LeetcodeRoleGrant, grant_id)
     if grant is not None:
         await session.delete(grant)
+
+
+# ---------------------------------------------------------------------------
+# LeetCode feature: engagement reads (admin)
+# ---------------------------------------------------------------------------
+
+
+async def list_leet_participants(
+    session: AsyncSession, guild_id: int, limit: int = 25
+) -> Sequence[User]:
+    """Return users in a guild who've solved at least one /leet problem.
+
+    Ordered by total solved desc, then current streak desc, then id (stable).
+    """
+    stmt = (
+        select(User)
+        .where(User.guild_id == guild_id, User.leetcode_solved_total > 0)
+        .order_by(
+            User.leetcode_solved_total.desc(),
+            User.leetcode_streak.desc(),
+            User.id.asc(),
+        )
+        .limit(limit)
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def count_leet_participants(session: AsyncSession, guild_id: int) -> int:
+    """Count users in a guild who've solved at least one /leet problem."""
+    stmt = select(func.count(User.id)).where(
+        User.guild_id == guild_id, User.leetcode_solved_total > 0
+    )
+    return int((await session.execute(stmt)).scalar_one())
