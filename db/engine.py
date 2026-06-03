@@ -21,12 +21,24 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def get_engine() -> AsyncEngine:
-    """Return the lazily-constructed module-level async engine."""
+    """Return the lazily-constructed module-level async engine.
+
+    The pool is deliberately bounded. We run against a Supabase connection
+    pooler with a hard client cap (15 on the session pooler), so the default
+    SQLAlchemy pool (5 + 10 overflow = up to 15) could consume the entire budget
+    on its own and starve migrations/other clients. Capping at 5 + 5 leaves
+    headroom; ``pool_pre_ping`` drops dead connections and ``pool_recycle``
+    refreshes them before the pooler times them out.
+    """
     global _engine
     if _engine is None:
         _engine = create_async_engine(
             load_config().database_url,
             pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=5,
+            pool_timeout=30,
+            pool_recycle=1800,
         )
     return _engine
 
