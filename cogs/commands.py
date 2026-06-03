@@ -135,6 +135,9 @@ class UserCommands(commands.Cog):
             account_created_at=target.created_at,
             text_xp_total=row.text_xp_total,
             voice_xp_total=row.voice_xp_total,
+            # /leet stats — additive line on the card, same progression.
+            leetcode_solved=row.leetcode_solved_total,
+            leetcode_streak=row.leetcode_streak,
         )
 
         loop = asyncio.get_running_loop()
