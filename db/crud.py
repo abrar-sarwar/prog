@@ -16,7 +16,7 @@ each other.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import NamedTuple, Sequence
 
 from sqlalchemy import and_, func, or_, select
@@ -24,8 +24,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.leetcode import compute_reward_xp, compute_streak_after_solve
 from core.leveling import LEVEL_CAP, cumulative_xp_to_level, level_from_total_xp
-from db.models import GuildConfig, RoleReward, User
+from db.models import (
+    GuildConfig,
+    LeetcodeAssignment,
+    LeetcodeLink,
+    LeetcodeRoleGrant,
+    RoleReward,
+    User,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -571,3 +579,293 @@ async def list_role_rewards(
         .order_by(RoleReward.level.asc())
     )
     return (await session.execute(stmt)).scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# LeetCode feature: per-guild config
+# ---------------------------------------------------------------------------
+
+
+async def set_leetcode_channel(
+    session: AsyncSession, guild_id: int, channel_id: int | None
+) -> GuildConfig:
+    """Set (or clear, with None) the /leet designated channel for a guild.
+
+    Nothing in the LeetCode feature runs until this is set via /setup-leet."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.leetcode_channel_id = channel_id
+    return config
+
+
+async def set_leetcode_reward_role(
+    session: AsyncSession, guild_id: int, role_id: int | None
+) -> GuildConfig:
+    """Set (or clear, with None) the timed reward role granted on a /leet solve."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.leetcode_reward_role_id = role_id
+    return config
+
+
+# ---------------------------------------------------------------------------
+# LeetCode feature: account links
+# ---------------------------------------------------------------------------
+
+
+async def get_leetcode_link(
+    session: AsyncSession, discord_user_id: int
+) -> LeetcodeLink | None:
+    """Return the verified LeetCode link for a Discord user, or None."""
+    stmt = select(LeetcodeLink).where(
+        LeetcodeLink.discord_user_id == discord_user_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_leetcode_link_by_username_key(
+    session: AsyncSession, username_key: str
+) -> LeetcodeLink | None:
+    """Return the link owning ``username_key`` (lowercased username), or None.
+
+    Used to stop two Discord users from claiming the same LeetCode account."""
+    stmt = select(LeetcodeLink).where(
+        LeetcodeLink.leetcode_username_key == username_key
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def upsert_leetcode_link(
+    session: AsyncSession,
+    discord_user_id: int,
+    leetcode_username: str,
+    leetcode_username_key: str,
+    verified_at: datetime,
+    leetcode_internal_id: str | None = None,
+) -> LeetcodeLink:
+    """Create or update a Discord user's verified LeetCode link.
+
+    Re-verifying overwrites username/key (handles a LeetCode username change).
+    """
+    link = await get_leetcode_link(session, discord_user_id)
+    if link is None:
+        link = LeetcodeLink(discord_user_id=discord_user_id)
+        session.add(link)
+    link.leetcode_username = leetcode_username
+    link.leetcode_username_key = leetcode_username_key
+    link.leetcode_internal_id = leetcode_internal_id
+    link.verified_at = verified_at
+    return link
+
+
+# ---------------------------------------------------------------------------
+# LeetCode feature: assignments (sessions)
+# ---------------------------------------------------------------------------
+
+
+async def get_active_assignment(
+    session: AsyncSession, discord_user_id: int, guild_id: int
+) -> LeetcodeAssignment | None:
+    """Return the user's currently-active assignment in this guild, or None."""
+    stmt = select(LeetcodeAssignment).where(
+        LeetcodeAssignment.discord_user_id == discord_user_id,
+        LeetcodeAssignment.guild_id == guild_id,
+        LeetcodeAssignment.status == "active",
+    )
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def count_assignments_since(
+    session: AsyncSession,
+    discord_user_id: int,
+    guild_id: int,
+    since: datetime,
+) -> int:
+    """Count assignments for this (user, guild) created at/after ``since``.
+
+    Used to enforce one attempt per UTC day: pass the start of the current UTC
+    day. Counts every attempt regardless of status (active/completed/expired),
+    so a used-up day can't be retried."""
+    stmt = select(func.count(LeetcodeAssignment.id)).where(
+        LeetcodeAssignment.discord_user_id == discord_user_id,
+        LeetcodeAssignment.guild_id == guild_id,
+        LeetcodeAssignment.assigned_at >= since,
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def create_assignment(
+    session: AsyncSession,
+    *,
+    discord_user_id: int,
+    guild_id: int,
+    problem_slug: str,
+    problem_title: str,
+    difficulty: str,
+    assigned_at: datetime,
+    expires_at: datetime,
+    thread_id: int | None = None,
+) -> LeetcodeAssignment:
+    """Insert a new active assignment row and return it."""
+    assignment = LeetcodeAssignment(
+        discord_user_id=discord_user_id,
+        guild_id=guild_id,
+        problem_slug=problem_slug,
+        problem_title=problem_title,
+        difficulty=difficulty,
+        assigned_at=assigned_at,
+        expires_at=expires_at,
+        thread_id=thread_id,
+        status="active",
+    )
+    session.add(assignment)
+    await session.flush()  # populate assignment.id for the caller
+    return assignment
+
+
+async def get_assignment(
+    session: AsyncSession, assignment_id: int
+) -> LeetcodeAssignment | None:
+    """Return an assignment by id, or None."""
+    return await session.get(LeetcodeAssignment, assignment_id)
+
+
+async def set_assignment_thread(
+    session: AsyncSession, assignment_id: int, thread_id: int
+) -> None:
+    """Record the private-thread id for an assignment."""
+    assignment = await session.get(LeetcodeAssignment, assignment_id)
+    if assignment is not None:
+        assignment.thread_id = thread_id
+
+
+async def list_active_assignments(
+    session: AsyncSession,
+) -> Sequence[LeetcodeAssignment]:
+    """Return every active assignment across all guilds (for the reaper/resume)."""
+    stmt = select(LeetcodeAssignment).where(
+        LeetcodeAssignment.status == "active"
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def complete_assignment(
+    session: AsyncSession, assignment_id: int, completed_at: datetime
+) -> bool:
+    """Mark an assignment completed. Returns False if it wasn't active anymore.
+
+    The active-status guard makes the payout idempotent: a second concurrent
+    detection that races in finds the row already non-active and bails, so the
+    same assignment never pays out twice."""
+    assignment = await session.get(LeetcodeAssignment, assignment_id)
+    if assignment is None or assignment.status != "active":
+        return False
+    assignment.status = "completed"
+    assignment.completed_at = completed_at
+    return True
+
+
+async def expire_assignment(
+    session: AsyncSession, assignment_id: int
+) -> bool:
+    """Mark an assignment expired. Returns False if it wasn't active."""
+    assignment = await session.get(LeetcodeAssignment, assignment_id)
+    if assignment is None or assignment.status != "active":
+        return False
+    assignment.status = "expired"
+    return True
+
+
+# ---------------------------------------------------------------------------
+# LeetCode feature: solve recording (XP + stats, race-safe)
+# ---------------------------------------------------------------------------
+
+
+class LeetSolveResult(NamedTuple):
+    """Outcome of recording a confirmed /leet solve."""
+
+    change: LevelChange
+    reward_xp: int
+    new_streak: int
+
+
+async def record_leet_solve(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    today: date,
+) -> LeetSolveResult:
+    """Apply a confirmed solve: streak, total, and streak-scaled XP, atomically.
+
+    Locks the user row, recomputes the streak from ``leetcode_last_solve_date``
+    relative to ``today`` (UTC), derives the reward from the new streak, adds it
+    to the cumulative XP that feeds the rank card, bumps the solved total, and
+    recomputes the level. The XP flows through the same ``xp``/level pipeline as
+    messages and voice; the flat reward itself is not multiplier-scaled.
+    """
+    user = await _lock_user(session, guild_id, user_id)
+    old_level = user.level
+    new_streak = compute_streak_after_solve(
+        user.leetcode_last_solve_date, today, user.leetcode_streak
+    )
+    reward_xp = compute_reward_xp(new_streak)
+    user.xp = user.xp + reward_xp
+    user.leetcode_solved_total = user.leetcode_solved_total + 1
+    user.leetcode_streak = new_streak
+    user.leetcode_last_solve_date = today
+    user.level = level_from_total_xp(user.xp)
+    return LeetSolveResult(
+        change=LevelChange(user=user, old_level=old_level, new_level=user.level),
+        reward_xp=reward_xp,
+        new_streak=new_streak,
+    )
+
+
+# ---------------------------------------------------------------------------
+# LeetCode feature: timed reward-role grants
+# ---------------------------------------------------------------------------
+
+
+async def upsert_leet_role_grant(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    role_id: int,
+    granted_at: datetime,
+    expires_at: datetime,
+) -> None:
+    """Record (or refresh) a timed reward-role grant.
+
+    Re-earning while a grant is still active refreshes ``granted_at``/
+    ``expires_at`` instead of stacking, via the unique (guild, user, role) key.
+    """
+    stmt = (
+        pg_insert(LeetcodeRoleGrant)
+        .values(
+            guild_id=guild_id,
+            user_id=user_id,
+            role_id=role_id,
+            granted_at=granted_at,
+            expires_at=expires_at,
+        )
+        .on_conflict_do_update(
+            constraint="uq_leet_role_grants_guild_user_role",
+            set_={"granted_at": granted_at, "expires_at": expires_at},
+        )
+    )
+    await session.execute(stmt)
+
+
+async def list_expired_role_grants(
+    session: AsyncSession, now: datetime
+) -> Sequence[LeetcodeRoleGrant]:
+    """Return all grants whose ``expires_at`` is at/before ``now``."""
+    stmt = select(LeetcodeRoleGrant).where(
+        LeetcodeRoleGrant.expires_at <= now
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def delete_role_grant(session: AsyncSession, grant_id: int) -> None:
+    """Delete a role-grant row (after the role has been removed)."""
+    grant = await session.get(LeetcodeRoleGrant, grant_id)
+    if grant is not None:
+        await session.delete(grant)
