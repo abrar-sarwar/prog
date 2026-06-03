@@ -126,6 +126,38 @@ async def set_level_up_channel(
     return config
 
 
+async def set_welcome_channel(
+    session: AsyncSession, guild_id: int, channel_id: int | None
+) -> GuildConfig:
+    """Set (or clear, with None) the channel welcome messages are posted to.
+
+    Setting a channel opts the guild into welcome-on-join; clearing it (None)
+    turns the feature off while keeping any saved welcome message text."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.welcome_channel_id = channel_id
+    return config
+
+
+async def set_welcome_intro_channel(
+    session: AsyncSession, guild_id: int, channel_id: int | None
+) -> GuildConfig:
+    """Set (or clear) the channel the ``{intro_channel}`` placeholder links to."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.welcome_intro_channel_id = channel_id
+    return config
+
+
+async def set_welcome_message(
+    session: AsyncSession, guild_id: int, message: str | None
+) -> GuildConfig:
+    """Set (or clear) the per-guild welcome message override.
+
+    ``None`` clears the override so the default template is used again."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.welcome_message = message
+    return config
+
+
 async def set_leaderboard_channel(
     session: AsyncSession, guild_id: int, channel_id: int | None
 ) -> GuildConfig:
@@ -252,6 +284,23 @@ async def get_or_create_user(
     fresh = await get_user(session, guild_id, user_id)
     assert fresh is not None
     return fresh
+
+
+async def set_saved_roles(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    role_ids: list[int],
+) -> User:
+    """Store the role IDs a member had at departure, for restore on rejoin.
+
+    Get-or-creates the user row (a member can leave before ever earning XP) and
+    reassigns ``saved_role_ids`` so SQLAlchemy detects the JSONB change. Caller
+    commits.
+    """
+    user = await get_or_create_user(session, guild_id, user_id)
+    user.saved_role_ids = list(role_ids)
+    return user
 
 
 async def _lock_user(

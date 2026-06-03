@@ -22,6 +22,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -70,6 +71,12 @@ class User(Base):
     """One-shot flag for the level-100 Aura announcement. Once set, the
     Aura message will never re-fire for this (guild, user), even if the
     user drops below 100 and climbs back."""
+    saved_role_ids: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    """Role IDs the member had at their last departure from the guild, captured
+    by ``on_member_remove`` and re-applied on rejoin. Excludes unassignable and
+    dangerous-permission roles (see :mod:`core.roles`)."""
 
     leetcode_total: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
@@ -131,6 +138,15 @@ class GuildConfig(Base):
     channel_roles: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
+    # Welcome-on-join. The feature is opt-in: a welcome message is only posted
+    # once ``welcome_channel_id`` is set. ``welcome_intro_channel_id`` is the
+    # target of the ``{intro_channel}`` placeholder; ``welcome_message`` is the
+    # per-guild override (NULL = use core.welcome.DEFAULT_WELCOME_MESSAGE).
+    welcome_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    welcome_intro_channel_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    welcome_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RoleReward(Base):
