@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool
 
 from config import load_config
 
@@ -35,15 +34,21 @@ def get_engine() -> AsyncEngine:
     if _engine is None:
         url = load_config().database_url
         if ":6543" in url:
-            # Supabase transaction pooler (Supavisor, port 6543): the pooler
-            # owns connection pooling, so use NullPool client-side, and disable
-            # asyncpg's prepared-statement cache — prepared statements don't
-            # survive transaction-mode pooling (different backend per txn).
-            # ``prepared_statement_cache_size=0`` in the URL disables
-            # SQLAlchemy's own asyncpg statement cache to match.
+            # Supabase transaction pooler (Supavisor, port 6543). The whole
+            # project shares a small Supavisor budget (~15 on free tier) across
+            # BOTH poolers, so a bounded, reused pool (not NullPool) is essential
+            # — it caps the bot's concurrent connections and avoids the rapid
+            # open/close churn that piled up against the limit under load.
+            # statement_cache_size=0 because prepared statements don't survive
+            # transaction-mode pooling; prepared_statement_cache_size=0 in the
+            # URL disables SQLAlchemy's matching cache.
             _engine = create_async_engine(
                 url,
-                poolclass=NullPool,
+                pool_pre_ping=True,
+                pool_size=3,
+                max_overflow=2,
+                pool_timeout=30,
+                pool_recycle=1800,
                 connect_args={"statement_cache_size": 0},
             )
         else:
