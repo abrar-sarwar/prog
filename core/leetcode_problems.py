@@ -1,12 +1,10 @@
-"""The curated LeetCode problem pool for the /leet feature (Blind 75).
+"""The curated problem pool for the /leet feature — the official LeetCode 75.
 
-This is the editable seed list. Every entry below was verified against the
-live ``leetcode.com`` GraphQL endpoint at build time — the ``slug`` resolves to
-a real problem and the ``difficulty``/``title`` are LeetCode's own values, not
-guesses. The six paid-only Blind 75 problems (encode-and-decode-strings,
-alien-dictionary, graph-valid-tree, number-of-connected-components-in-an-
-undirected-graph, meeting-rooms, meeting-rooms-ii) are intentionally excluded
-so that free LeetCode accounts can always solve the assigned problem.
+This is the editable seed list. It mirrors LeetCode's official **LeetCode 75**
+study plan (https://leetcode.com/studyplan/leetcode-75/): 75 problems, all free
+(no Premium-locked entries), grouped by the plan's own categories for
+readability. Every slug + title + difficulty was pulled straight from LeetCode's
+study-plan API, not guessed.
 
 To curate the pool, edit :data:`PROBLEM_POOL` directly — add/remove rows. Keep
 slugs accurate (the slug is the ``leetcode.com/problems/<slug>/`` path segment);
@@ -33,88 +31,107 @@ class LeetProblem:
         return f"https://leetcode.com/problems/{self.slug}/"
 
 
-# Blind 75 (free problems only), verified live. Order is by category for
-# readability; selection is random so order has no functional meaning.
+# The official LeetCode 75 study plan, verified live against leetcode.com — all
+# free. Grouped by the plan's categories; selection is random so order has no
+# functional meaning.
 PROBLEM_POOL: list[LeetProblem] = [
-    # Arrays & Hashing
-    LeetProblem("two-sum", "Two Sum", "Easy"),
-    LeetProblem("best-time-to-buy-and-sell-stock", "Best Time to Buy and Sell Stock", "Easy"),
-    LeetProblem("contains-duplicate", "Contains Duplicate", "Easy"),
+    # Array / String
+    LeetProblem("merge-strings-alternately", "Merge Strings Alternately", "Easy"),
+    LeetProblem("greatest-common-divisor-of-strings", "Greatest Common Divisor of Strings", "Easy"),
+    LeetProblem("kids-with-the-greatest-number-of-candies", "Kids With the Greatest Number of Candies", "Easy"),
+    LeetProblem("can-place-flowers", "Can Place Flowers", "Easy"),
+    LeetProblem("reverse-vowels-of-a-string", "Reverse Vowels of a String", "Easy"),
+    LeetProblem("reverse-words-in-a-string", "Reverse Words in a String", "Medium"),
     LeetProblem("product-of-array-except-self", "Product of Array Except Self", "Medium"),
-    LeetProblem("maximum-subarray", "Maximum Subarray", "Medium"),
-    LeetProblem("maximum-product-subarray", "Maximum Product Subarray", "Medium"),
-    LeetProblem("find-minimum-in-rotated-sorted-array", "Find Minimum in Rotated Sorted Array", "Medium"),
-    LeetProblem("search-in-rotated-sorted-array", "Search in Rotated Sorted Array", "Medium"),
-    LeetProblem("3sum", "3Sum", "Medium"),
+    LeetProblem("increasing-triplet-subsequence", "Increasing Triplet Subsequence", "Medium"),
+    LeetProblem("string-compression", "String Compression", "Medium"),
+    # Two Pointers
+    LeetProblem("move-zeroes", "Move Zeroes", "Easy"),
+    LeetProblem("is-subsequence", "Is Subsequence", "Easy"),
     LeetProblem("container-with-most-water", "Container With Most Water", "Medium"),
-    LeetProblem("group-anagrams", "Group Anagrams", "Medium"),
-    LeetProblem("valid-anagram", "Valid Anagram", "Easy"),
-    LeetProblem("top-k-frequent-elements", "Top K Frequent Elements", "Medium"),
-    # Binary
-    LeetProblem("sum-of-two-integers", "Sum of Two Integers", "Medium"),
-    LeetProblem("number-of-1-bits", "Number of 1 Bits", "Easy"),
-    LeetProblem("counting-bits", "Counting Bits", "Easy"),
-    LeetProblem("missing-number", "Missing Number", "Easy"),
-    LeetProblem("reverse-bits", "Reverse Bits", "Easy"),
-    # Dynamic Programming
-    LeetProblem("climbing-stairs", "Climbing Stairs", "Easy"),
-    LeetProblem("coin-change", "Coin Change", "Medium"),
-    LeetProblem("longest-increasing-subsequence", "Longest Increasing Subsequence", "Medium"),
-    LeetProblem("longest-common-subsequence", "Longest Common Subsequence", "Medium"),
-    LeetProblem("word-break", "Word Break", "Medium"),
-    LeetProblem("combination-sum", "Combination Sum", "Medium"),
-    LeetProblem("house-robber", "House Robber", "Medium"),
-    LeetProblem("house-robber-ii", "House Robber II", "Medium"),
-    LeetProblem("decode-ways", "Decode Ways", "Medium"),
-    LeetProblem("unique-paths", "Unique Paths", "Medium"),
-    LeetProblem("jump-game", "Jump Game", "Medium"),
-    # Graph
-    LeetProblem("clone-graph", "Clone Graph", "Medium"),
-    LeetProblem("course-schedule", "Course Schedule", "Medium"),
-    LeetProblem("pacific-atlantic-water-flow", "Pacific Atlantic Water Flow", "Medium"),
-    LeetProblem("number-of-islands", "Number of Islands", "Medium"),
-    LeetProblem("longest-consecutive-sequence", "Longest Consecutive Sequence", "Medium"),
-    # Intervals
-    LeetProblem("insert-interval", "Insert Interval", "Medium"),
-    LeetProblem("merge-intervals", "Merge Intervals", "Medium"),
-    LeetProblem("non-overlapping-intervals", "Non-overlapping Intervals", "Medium"),
+    LeetProblem("max-number-of-k-sum-pairs", "Max Number of K-Sum Pairs", "Medium"),
+    # Sliding Window
+    LeetProblem("maximum-average-subarray-i", "Maximum Average Subarray I", "Easy"),
+    LeetProblem("maximum-number-of-vowels-in-a-substring-of-given-length", "Maximum Number of Vowels in a Substring of Given Length", "Medium"),
+    LeetProblem("max-consecutive-ones-iii", "Max Consecutive Ones III", "Medium"),
+    LeetProblem("longest-subarray-of-1s-after-deleting-one-element", "Longest Subarray of 1's After Deleting One Element", "Medium"),
+    # Prefix Sum
+    LeetProblem("find-the-highest-altitude", "Find the Highest Altitude", "Easy"),
+    LeetProblem("find-pivot-index", "Find Pivot Index", "Easy"),
+    # Hash Map / Set
+    LeetProblem("find-the-difference-of-two-arrays", "Find the Difference of Two Arrays", "Easy"),
+    LeetProblem("unique-number-of-occurrences", "Unique Number of Occurrences", "Easy"),
+    LeetProblem("determine-if-two-strings-are-close", "Determine if Two Strings Are Close", "Medium"),
+    LeetProblem("equal-row-and-column-pairs", "Equal Row and Column Pairs", "Medium"),
+    # Stack
+    LeetProblem("removing-stars-from-a-string", "Removing Stars From a String", "Medium"),
+    LeetProblem("asteroid-collision", "Asteroid Collision", "Medium"),
+    LeetProblem("decode-string", "Decode String", "Medium"),
+    # Queue
+    LeetProblem("number-of-recent-calls", "Number of Recent Calls", "Easy"),
+    LeetProblem("dota2-senate", "Dota2 Senate", "Medium"),
     # Linked List
+    LeetProblem("delete-the-middle-node-of-a-linked-list", "Delete the Middle Node of a Linked List", "Medium"),
+    LeetProblem("odd-even-linked-list", "Odd Even Linked List", "Medium"),
     LeetProblem("reverse-linked-list", "Reverse Linked List", "Easy"),
-    LeetProblem("linked-list-cycle", "Linked List Cycle", "Easy"),
-    LeetProblem("merge-two-sorted-lists", "Merge Two Sorted Lists", "Easy"),
-    LeetProblem("merge-k-sorted-lists", "Merge k Sorted Lists", "Hard"),
-    LeetProblem("remove-nth-node-from-end-of-list", "Remove Nth Node From End of List", "Medium"),
-    LeetProblem("reorder-list", "Reorder List", "Medium"),
-    # Matrix
-    LeetProblem("set-matrix-zeroes", "Set Matrix Zeroes", "Medium"),
-    LeetProblem("spiral-matrix", "Spiral Matrix", "Medium"),
-    LeetProblem("rotate-image", "Rotate Image", "Medium"),
-    LeetProblem("word-search", "Word Search", "Medium"),
-    # Strings
-    LeetProblem("longest-substring-without-repeating-characters", "Longest Substring Without Repeating Characters", "Medium"),
-    LeetProblem("longest-repeating-character-replacement", "Longest Repeating Character Replacement", "Medium"),
-    LeetProblem("minimum-window-substring", "Minimum Window Substring", "Hard"),
-    LeetProblem("valid-parentheses", "Valid Parentheses", "Easy"),
-    LeetProblem("valid-palindrome", "Valid Palindrome", "Easy"),
-    LeetProblem("longest-palindromic-substring", "Longest Palindromic Substring", "Medium"),
-    LeetProblem("palindromic-substrings", "Palindromic Substrings", "Medium"),
-    # Trees
+    LeetProblem("maximum-twin-sum-of-a-linked-list", "Maximum Twin Sum of a Linked List", "Medium"),
+    # Binary Tree - DFS
     LeetProblem("maximum-depth-of-binary-tree", "Maximum Depth of Binary Tree", "Easy"),
-    LeetProblem("same-tree", "Same Tree", "Easy"),
-    LeetProblem("invert-binary-tree", "Invert Binary Tree", "Easy"),
-    LeetProblem("binary-tree-maximum-path-sum", "Binary Tree Maximum Path Sum", "Hard"),
-    LeetProblem("binary-tree-level-order-traversal", "Binary Tree Level Order Traversal", "Medium"),
-    LeetProblem("serialize-and-deserialize-binary-tree", "Serialize and Deserialize Binary Tree", "Hard"),
-    LeetProblem("subtree-of-another-tree", "Subtree of Another Tree", "Easy"),
-    LeetProblem("construct-binary-tree-from-preorder-and-inorder-traversal", "Construct Binary Tree from Preorder and Inorder Traversal", "Medium"),
-    LeetProblem("validate-binary-search-tree", "Validate Binary Search Tree", "Medium"),
-    LeetProblem("kth-smallest-element-in-a-bst", "Kth Smallest Element in a BST", "Medium"),
-    LeetProblem("lowest-common-ancestor-of-a-binary-search-tree", "Lowest Common Ancestor of a Binary Search Tree", "Medium"),
+    LeetProblem("leaf-similar-trees", "Leaf-Similar Trees", "Easy"),
+    LeetProblem("count-good-nodes-in-binary-tree", "Count Good Nodes in Binary Tree", "Medium"),
+    LeetProblem("path-sum-iii", "Path Sum III", "Medium"),
+    LeetProblem("longest-zigzag-path-in-a-binary-tree", "Longest ZigZag Path in a Binary Tree", "Medium"),
+    LeetProblem("lowest-common-ancestor-of-a-binary-tree", "Lowest Common Ancestor of a Binary Tree", "Medium"),
+    # Binary Tree - BFS
+    LeetProblem("binary-tree-right-side-view", "Binary Tree Right Side View", "Medium"),
+    LeetProblem("maximum-level-sum-of-a-binary-tree", "Maximum Level Sum of a Binary Tree", "Medium"),
+    # Binary Search Tree
+    LeetProblem("search-in-a-binary-search-tree", "Search in a Binary Search Tree", "Easy"),
+    LeetProblem("delete-node-in-a-bst", "Delete Node in a BST", "Medium"),
+    # Graphs - DFS
+    LeetProblem("keys-and-rooms", "Keys and Rooms", "Medium"),
+    LeetProblem("number-of-provinces", "Number of Provinces", "Medium"),
+    LeetProblem("reorder-routes-to-make-all-paths-lead-to-the-city-zero", "Reorder Routes to Make All Paths Lead to the City Zero", "Medium"),
+    LeetProblem("evaluate-division", "Evaluate Division", "Medium"),
+    # Graphs - BFS
+    LeetProblem("nearest-exit-from-entrance-in-maze", "Nearest Exit from Entrance in Maze", "Medium"),
+    LeetProblem("rotting-oranges", "Rotting Oranges", "Medium"),
+    # Heap / Priority Queue
+    LeetProblem("kth-largest-element-in-an-array", "Kth Largest Element in an Array", "Medium"),
+    LeetProblem("smallest-number-in-infinite-set", "Smallest Number in Infinite Set", "Medium"),
+    LeetProblem("maximum-subsequence-score", "Maximum Subsequence Score", "Medium"),
+    LeetProblem("total-cost-to-hire-k-workers", "Total Cost to Hire K Workers", "Medium"),
+    # Binary Search
+    LeetProblem("guess-number-higher-or-lower", "Guess Number Higher or Lower", "Easy"),
+    LeetProblem("successful-pairs-of-spells-and-potions", "Successful Pairs of Spells and Potions", "Medium"),
+    LeetProblem("find-peak-element", "Find Peak Element", "Medium"),
+    LeetProblem("koko-eating-bananas", "Koko Eating Bananas", "Medium"),
+    # Backtracking
+    LeetProblem("letter-combinations-of-a-phone-number", "Letter Combinations of a Phone Number", "Medium"),
+    LeetProblem("combination-sum-iii", "Combination Sum III", "Medium"),
+    # DP - 1D
+    LeetProblem("n-th-tribonacci-number", "N-th Tribonacci Number", "Easy"),
+    LeetProblem("min-cost-climbing-stairs", "Min Cost Climbing Stairs", "Easy"),
+    LeetProblem("house-robber", "House Robber", "Medium"),
+    LeetProblem("domino-and-tromino-tiling", "Domino and Tromino Tiling", "Medium"),
+    # DP - Multidimensional
+    LeetProblem("unique-paths", "Unique Paths", "Medium"),
+    LeetProblem("longest-common-subsequence", "Longest Common Subsequence", "Medium"),
+    LeetProblem("best-time-to-buy-and-sell-stock-with-transaction-fee", "Best Time to Buy and Sell Stock with Transaction Fee", "Medium"),
+    LeetProblem("edit-distance", "Edit Distance", "Medium"),
+    # Bit Manipulation
+    LeetProblem("counting-bits", "Counting Bits", "Easy"),
+    LeetProblem("single-number", "Single Number", "Easy"),
+    LeetProblem("minimum-flips-to-make-a-or-b-equal-to-c", "Minimum Flips to Make a OR b Equal to c", "Medium"),
+    # Trie
     LeetProblem("implement-trie-prefix-tree", "Implement Trie (Prefix Tree)", "Medium"),
-    LeetProblem("design-add-and-search-words-data-structure", "Design Add and Search Words Data Structure", "Medium"),
-    LeetProblem("word-search-ii", "Word Search II", "Hard"),
-    # Heap
-    LeetProblem("find-median-from-data-stream", "Find Median from Data Stream", "Hard"),
+    LeetProblem("search-suggestions-system", "Search Suggestions System", "Medium"),
+    # Intervals
+    LeetProblem("non-overlapping-intervals", "Non-overlapping Intervals", "Medium"),
+    LeetProblem("minimum-number-of-arrows-to-burst-balloons", "Minimum Number of Arrows to Burst Balloons", "Medium"),
+    # Monotonic Stack
+    LeetProblem("daily-temperatures", "Daily Temperatures", "Medium"),
+    LeetProblem("online-stock-span", "Online Stock Span", "Medium"),
 ]
 
 _BY_SLUG: dict[str, LeetProblem] = {p.slug: p for p in PROBLEM_POOL}
