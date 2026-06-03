@@ -277,6 +277,94 @@ class Leet(commands.Cog):
         )
 
     # ------------------------------------------------------------------
+    # Admin overrides
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="reset-leet-daily",
+        description="Clear a member's LeetCode daily attempt so they can run /leet again today",
+    )
+    @app_commands.describe(user="Member whose daily attempt to clear")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def reset_leet_daily(
+        self, interaction: discord.Interaction, user: discord.Member
+    ) -> None:
+        """Wipe today's attempt(s) for a member (and any active session)."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        now = datetime.now(timezone.utc)
+        # Cancel + archive any in-flight session so nothing dangles.
+        async with get_session_factory()() as session:
+            active = await crud.get_active_assignment(session, user.id, guild.id)
+            await session.commit()
+        if active is not None:
+            task = self._sessions.pop(active.id, None)
+            if task is not None:
+                task.cancel()
+            if active.thread_id is not None:
+                await self._archive_thread(active.thread_id)
+
+        async with get_session_factory()() as session:
+            removed = await crud.delete_assignments_since(
+                session, user.id, guild.id, _utc_day_start(now)
+            )
+            await session.commit()
+
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="leet daily reset",
+                description=(
+                    f"cleared {removed} attempt(s) today for {user.mention}. "
+                    "they can run `/leet` again now."
+                ),
+                color=discord.Color.blurple(),
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="approve-leet",
+        description="Manually approve a member's active LeetCode session as solved",
+    )
+    @app_commands.describe(user="Member whose active session to approve")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def approve_leet(
+        self, interaction: discord.Interaction, user: discord.Member
+    ) -> None:
+        """Force a confirmed solve for a member's active session (detection override)."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        async with get_session_factory()() as session:
+            active = await crud.get_active_assignment(session, user.id, guild.id)
+            await session.commit()
+        if active is None:
+            await interaction.followup.send(
+                f"{user.mention} doesn't have an active leet session to approve.",
+                ephemeral=True,
+            )
+            return
+
+        # Stop the detector first so it can't also fire; the complete_assignment
+        # guard inside _award_solve keeps the payout idempotent regardless.
+        task = self._sessions.pop(active.id, None)
+        if task is not None:
+            task.cancel()
+        await self._award_solve(user, active.id, active.thread_id or 0)
+
+        await interaction.followup.send(
+            f"approved {user.mention}'s solve for **{active.problem_title}**.",
+            ephemeral=True,
+        )
+
+    # ------------------------------------------------------------------
     # /leetverify
     # ------------------------------------------------------------------
 

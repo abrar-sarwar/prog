@@ -22,12 +22,13 @@ from datetime import date, timedelta
 from typing import Iterable, Mapping
 
 from core.constants import (
-    LEET_REWARD_BASE_XP,
-    LEET_REWARD_CAP_XP,
+    LEET_REWARD_BASE_FRACTION,
+    LEET_REWARD_CAP_FRACTION,
     LEET_REWARD_STREAK_MILESTONE_DAYS,
     LEET_VERIFICATION_CODE_CHARS,
     LEET_VERIFICATION_CODE_PREFIX,
 )
+from core.leveling import LEVEL_CAP, xp_for_level
 
 # Unambiguous alphanumerics for the verification code (no 0/O, 1/I/l) so a user
 # copying it into their LeetCode bio can't fat-finger a look-alike.
@@ -60,26 +61,33 @@ def code_present_in_bio(code: str, bio: str | None) -> bool:
 
 def compute_reward_xp(
     streak_days: int,
+    current_level: int,
     *,
-    base: int = LEET_REWARD_BASE_XP,
-    cap: int = LEET_REWARD_CAP_XP,
+    base_fraction: float = LEET_REWARD_BASE_FRACTION,
+    cap_fraction: float = LEET_REWARD_CAP_FRACTION,
     milestone: int = LEET_REWARD_STREAK_MILESTONE_DAYS,
 ) -> int:
-    """Return the XP payout for a solve at the given (post-solve) streak.
+    """Return the XP payout for a solve, scaled to the user's level and streak.
 
-    Linear climb from ``base`` to ``cap`` over ``milestone`` days::
+    The payout is a fraction of the XP cost to cross into the user's *next*
+    level (``xp_for_level(current_level + 1)``), so it's measured in fractions
+    of a level rather than raw XP. The fraction climbs linearly with the streak::
 
-        reward = base + (cap - base) * min(streak_days, milestone) / milestone
+        fraction = base_fraction + (cap_fraction - base_fraction)
+                   * min(streak_days, milestone) / milestone
+        reward   = round(fraction * xp_for_level(current_level + 1))
 
-    With the defaults (500 / 1500 / 14): a 1-day streak pays 571, a 7-day
-    streak pays 1000, and any streak >= 14 days pays the 1500 cap. ``streak_days``
-    is the streak *including* today's solve (a first-ever solve is day 1).
-    Defensive: a non-positive streak floors at the base payout.
+    With the defaults (0.75 -> 1.5 over 14 days): a fresh solo solve is worth
+    ~0.75 of a level, a 14-day streak ~1.5 levels — at *every* level, because it
+    tracks the curve. This stops a low-level solver from leaping many cheap early
+    levels off one flat grant. ``streak_days`` includes today's solve (a first
+    solve is day 1); ``current_level`` is the level before this reward. Floors at
+    1 XP so a solve always grants something.
     """
-    if streak_days <= 0:
-        return base
-    capped = min(streak_days, milestone)
-    return round(base + (cap - base) * capped / milestone)
+    capped = min(max(streak_days, 0), milestone)
+    fraction = base_fraction + (cap_fraction - base_fraction) * capped / milestone
+    next_level = min(max(current_level, 0) + 1, LEVEL_CAP)
+    return max(1, round(fraction * xp_for_level(next_level)))
 
 
 def compute_streak_after_solve(

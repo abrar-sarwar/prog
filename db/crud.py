@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import NamedTuple, Sequence
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -747,6 +747,26 @@ async def list_active_assignments(
     return (await session.execute(stmt)).scalars().all()
 
 
+async def delete_assignments_since(
+    session: AsyncSession,
+    discord_user_id: int,
+    guild_id: int,
+    since: datetime,
+) -> int:
+    """Delete a user's assignments created at/after ``since``; return the count.
+
+    Backs the admin ``/reset-leet-daily`` override: pass the start of the
+    current UTC day to wipe today's attempt(s) so the user can run /leet again.
+    """
+    stmt = delete(LeetcodeAssignment).where(
+        LeetcodeAssignment.discord_user_id == discord_user_id,
+        LeetcodeAssignment.guild_id == guild_id,
+        LeetcodeAssignment.assigned_at >= since,
+    )
+    result = await session.execute(stmt)
+    return result.rowcount or 0
+
+
 async def complete_assignment(
     session: AsyncSession, assignment_id: int, completed_at: datetime
 ) -> bool:
@@ -806,7 +826,9 @@ async def record_leet_solve(
     new_streak = compute_streak_after_solve(
         user.leetcode_last_solve_date, today, user.leetcode_streak
     )
-    reward_xp = compute_reward_xp(new_streak)
+    # Level-scaled: reward is a fraction of the next level's cost, computed from
+    # the level the user is at right now (before this grant).
+    reward_xp = compute_reward_xp(new_streak, old_level)
     user.xp = user.xp + reward_xp
     user.leetcode_solved_total = user.leetcode_solved_total + 1
     user.leetcode_streak = new_streak

@@ -10,11 +10,8 @@ from __future__ import annotations
 import random
 from datetime import date
 
-from core.constants import (
-    LEET_REWARD_BASE_XP,
-    LEET_REWARD_CAP_XP,
-    LEET_VERIFICATION_CODE_PREFIX,
-)
+from core.constants import LEET_VERIFICATION_CODE_PREFIX
+from core.leveling import xp_for_level
 from core.leetcode import (
     code_present_in_bio,
     compute_reward_xp,
@@ -54,30 +51,41 @@ def test_code_present_in_bio_case_insensitive_substring():
 # --- reward calc ------------------------------------------------------------
 
 
-def test_reward_floor_at_base_for_first_day():
-    # day 1: 500 + 1000*1/14 = 571.43 -> 571
-    assert compute_reward_xp(1) == 571
+def test_reward_solo_solve_is_base_fraction_of_next_level():
+    # streak 0/1 at level 0 -> base_fraction (0.75) * xp_for_level(1) = 24
+    assert compute_reward_xp(0, 0) == round(0.75 * xp_for_level(1))
 
 
-def test_reward_midpoint_at_seven_days():
-    # day 7: 500 + 1000*7/14 = 1000 exactly
-    assert compute_reward_xp(7) == 1000
+def test_reward_caps_at_milestone_fraction():
+    full = round(1.5 * xp_for_level(1))  # level 0 -> next level is 1
+    assert compute_reward_xp(14, 0) == full
+    assert compute_reward_xp(20, 0) == full
+    assert compute_reward_xp(1000, 0) == full
 
 
-def test_reward_caps_at_milestone():
-    assert compute_reward_xp(14) == LEET_REWARD_CAP_XP
-    assert compute_reward_xp(20) == LEET_REWARD_CAP_XP
-    assert compute_reward_xp(1000) == LEET_REWARD_CAP_XP
+def test_reward_scales_up_with_level():
+    # Same streak, higher level -> bigger payout (it tracks the curve).
+    assert compute_reward_xp(1, 10) > compute_reward_xp(1, 0)
 
 
-def test_reward_nonpositive_streak_is_base():
-    assert compute_reward_xp(0) == LEET_REWARD_BASE_XP
-    assert compute_reward_xp(-3) == LEET_REWARD_BASE_XP
+def test_reward_increases_with_streak():
+    assert compute_reward_xp(7, 5) > compute_reward_xp(0, 5)
+    assert compute_reward_xp(14, 5) > compute_reward_xp(7, 5)
 
 
-def test_reward_respects_custom_constants():
-    # base 100, cap 200, milestone 10 -> day 5 = 150
-    assert compute_reward_xp(5, base=100, cap=200, milestone=10) == 150
+def test_reward_never_rockets_a_low_level_solver():
+    # The old flat grant was 571 at level 0 (past level 7). Now even a maxed
+    # streak at level 0 is a fraction of a level — nowhere near that.
+    assert compute_reward_xp(14, 0) < 60
+
+
+def test_reward_floors_at_one():
+    assert compute_reward_xp(0, 0, base_fraction=0.0, cap_fraction=0.0) == 1
+
+
+def test_reward_respects_custom_fractions():
+    # base 1.0 at level 0 -> exactly one level's cost
+    assert compute_reward_xp(0, 0, base_fraction=1.0, cap_fraction=1.0) == xp_for_level(1)
 
 
 # --- streak math ------------------------------------------------------------

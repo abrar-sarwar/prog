@@ -144,9 +144,9 @@ class RankCardData:
     account_created_at: Optional[datetime] = None  # member.created_at
     text_xp_total: int = 0
     voice_xp_total: int = 0
-    # LeetCode /leet feature stats — rendered as a small block under the LEVEL
-    # numeral, just above the progress bar (NOT a separate rank ladder).
-    # Default 0 keeps the card valid for users who've never done a /leet.
+    # LeetCode /leet feature stats — rendered as a vertical block under the
+    # avatar (NOT a separate rank ladder). Default 0 keeps the card valid for
+    # users who've never done a /leet.
     leetcode_solved: int = 0
     leetcode_streak: int = 0
 
@@ -552,43 +552,46 @@ class _RankRenderer:
     # ---------- leetcode footer line ----------
 
     def _draw_leet_footer(self, canvas: Image.Image) -> None:
-        """Draw the LeetCode stats as a small block tucked under the LEVEL
-        numeral, just above the progress bar.
+        """Draw the LeetCode stats as a vertical block under the avatar.
 
-        Left-aligned with the identity column so it reads as sitting beneath the
-        big level number: a small accent-dotted ``LEETCODE`` label with the
-        solved/streak value below it. Additive to the rank info, same single
-        progression (not a separate ladder); easy to retune.
+        Left-aligned beneath the member's avatar: a small accent-dotted
+        ``LEETCODE`` label, then the solved count on one line and the streak on
+        the next. Additive to the rank info, same single progression (not a
+        separate ladder); easy to retune.
         """
         draw = ImageDraw.Draw(canvas, "RGBA")
-        bar_y = CANVAS_H - 116
-        rx = IDENTITY_COL_X
+        ax = H_PAD
+        avatar_bottom = HERO_TOP_Y + AVATAR_SIZE
+        max_w = IDENTITY_COL_X - ax - 24  # keep clear of the identity column
 
         solved = max(0, self.data.leetcode_solved)
         streak = max(0, self.data.leetcode_streak)
-        if solved == 0 and streak == 0:
-            value_text = "NO SOLVES YET"
-        else:
-            value_text = f"{solved} SOLVED, {streak}D STREAK"
 
-        label_font = self._sans(24, weight=700)
-        value_font = self._sans(32, weight=700)
+        label_font = self._sans(22, weight=700)
+        value_font = self._sans(34, weight=700)
 
-        # Stack label above value, sitting just above the progress bar.
-        label_y = bar_y - 96
-        value_y = bar_y - 60
-        dot = 12
+        y = avatar_bottom + 44
+        dot = 11
         draw.rectangle(
-            (rx, label_y + 6, rx + dot, label_y + 6 + dot),
-            fill=self.accent + (255,),
+            (ax, y + 5, ax + dot, y + 5 + dot), fill=self.accent + (255,)
         )
+        draw.text((ax + dot + 12, y), "LEETCODE", font=label_font, fill=TEXT_DIM)
+        y += 38
+
+        if solved == 0 and streak == 0:
+            draw.text(
+                (ax, y), _truncate("NO SOLVES YET", value_font, max_w),
+                font=value_font, fill=self.accent + (255,),
+            )
+            return
         draw.text(
-            (rx + dot + 14, label_y), "LEETCODE", font=label_font, fill=TEXT_DIM
+            (ax, y), _truncate(f"{solved} SOLVED", value_font, max_w),
+            font=value_font, fill=self.accent + (255,),
         )
-        value_max_w = STATS_COL_X - rx - 24
-        value_text = _truncate(value_text, value_font, value_max_w)
+        y += 42
         draw.text(
-            (rx, value_y), value_text, font=value_font, fill=self.accent + (255,)
+            (ax, y), _truncate(f"{streak}D STREAK", value_font, max_w),
+            font=value_font, fill=self.accent + (255,),
         )
 
     # ---------- text-fit helper ----------

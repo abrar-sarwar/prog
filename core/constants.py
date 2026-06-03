@@ -82,11 +82,16 @@ LEET_POLL_MAX_SECONDS: int = 60
 random duration in [MIN, MAX] so the request pattern isn't a perfectly even
 machine-gun against LeetCode."""
 
-LEET_REWARD_BASE_XP: int = 500
-"""Flat XP for a confirmed solve at a 0/1-day streak (the floor of the climb)."""
+# The reward is LEVEL-SCALED, not a flat XP grant: a solve is worth a fraction
+# of the XP needed to cross into the user's NEXT level. That keeps it fair across
+# the curve — a low-level solver doesn't rocket up many cheap early levels, and a
+# high-level solver still gets a meaningful chunk — because the payout is always
+# measured in "fraction of a level", never raw XP.
+LEET_REWARD_BASE_FRACTION: float = 0.75
+"""Fraction of the next level's XP cost granted at a 0/1-day streak."""
 
-LEET_REWARD_CAP_XP: int = 1500
-"""Maximum XP for a confirmed solve, reached at the streak milestone."""
+LEET_REWARD_CAP_FRACTION: float = 1.5
+"""Fraction of the next level's XP cost granted at/above the streak milestone."""
 
 LEET_REWARD_STREAK_MILESTONE_DAYS: int = 14
 """Streak length (consecutive UTC solve-days) at which the reward hits the cap."""
