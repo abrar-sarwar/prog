@@ -54,3 +54,66 @@ LEADERBOARD_SAFETY_POLL_MINUTES: int = 10
 """Belt-and-suspenders: every N minutes, re-check each configured guild's
 top-N against cache in case any change-driven update was dropped (bot
 restart between dispatch and edit, missed event, etc.)."""
+
+# --- LeetCode integration (the /leet website-solve feature) ----------------
+#
+# A user runs /leet in the configured channel, gets a random real LeetCode
+# problem in a private thread, solves it on leetcode.com, and the bot detects
+# their accepted submission by polling their PUBLIC profile. All timing and
+# reward values are tunable here.
+
+LEET_SESSION_MINUTES: int = 60
+"""How long a /leet session stays open. The clock starts at assignment;
+``expires_at = assigned_at + LEET_SESSION_MINUTES``. Never extended."""
+
+LEET_ARE_YOU_THERE_MINUTES: int = 30
+"""Minutes into a session at which the bot pings the user in the thread to
+confirm they're still working (the "are you there?" check)."""
+
+LEET_ARE_YOU_THERE_WAIT_SECONDS: int = 300
+"""How long the user has to respond to the "are you there?" ping before the
+bot stops polling early and lets the session quietly expire (default 5 min)."""
+
+LEET_POLL_MIN_SECONDS: int = 30
+"""Lower bound of the per-session detection poll interval."""
+
+LEET_POLL_MAX_SECONDS: int = 60
+"""Upper bound of the per-session detection poll interval. Each poll waits a
+random duration in [MIN, MAX] so the request pattern isn't a perfectly even
+machine-gun against LeetCode."""
+
+LEET_REWARD_BASE_XP: int = 500
+"""Flat XP for a confirmed solve at a 0/1-day streak (the floor of the climb)."""
+
+LEET_REWARD_CAP_XP: int = 1500
+"""Maximum XP for a confirmed solve, reached at the streak milestone."""
+
+LEET_REWARD_STREAK_MILESTONE_DAYS: int = 14
+"""Streak length (consecutive UTC solve-days) at which the reward hits the cap."""
+
+LEET_REWARD_ROLE_DURATION_HOURS: int = 24
+"""How long the configured reward role stays on a user after a solve before a
+background task removes it. Re-earning refreshes (does not stack) the timer."""
+
+LEET_VERIFICATION_CODE_PREFIX: str = "progsu-"
+"""Prefix for the one-time profile verification code (``progsu-XXXX``)."""
+
+LEET_VERIFICATION_CODE_CHARS: int = 4
+"""Number of random alphanumeric characters after the prefix."""
+
+LEET_GRANT_SWEEP_SECONDS: int = 60
+"""Interval of the background sweep that removes expired reward-role grants
+and reaps any sessions that outlived their window (belt-and-suspenders to the
+per-session task)."""
+
+LEET_HTTP_TIMEOUT_SECONDS: float = 10.0
+"""Per-request timeout for all LeetCode GraphQL calls."""
+
+LEET_RECENT_AC_LIMIT: int = 20
+"""How many recent accepted submissions to pull when detecting a solve."""
+
+LEET_USER_AGENT: str = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+"""Browser-like User-Agent sent on every LeetCode request (GraphQL hygiene)."""
