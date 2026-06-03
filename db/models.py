@@ -19,7 +19,9 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    ForeignKey,
     Integer,
+    String,
     UniqueConstraint,
     text,
 )
@@ -68,6 +70,25 @@ class User(Base):
     """One-shot flag for the level-100 Aura announcement. Once set, the
     Aura message will never re-fire for this (guild, user), even if the
     user drops below 100 and climbs back."""
+
+    leetcode_total: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    leetcode_streak: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    leetcode_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    leetcode_active_question_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("leetcode_questions.id"), nullable=True
+    )
+    leetcode_thread_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    leetcode_thread_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class GuildConfig(Base):
@@ -129,3 +150,29 @@ class RoleReward(Base):
     guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
     role_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class LeetcodeQuestion(Base):
+    """Curated list of LeetCode problems."""
+
+    __tablename__ = "leetcode_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    url: Mapped[str] = mapped_column(String, nullable=False)
+    difficulty: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class LeetcodeHistory(Base):
+    """History log of LeetCode threads/sessions."""
+
+    __tablename__ = "leetcode_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    question_id: Mapped[int] = mapped_column(Integer, ForeignKey("leetcode_questions.id"), nullable=False)
+    thread_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)  # "completed" or "expired"

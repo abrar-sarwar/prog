@@ -28,6 +28,7 @@ def compute_final_xp(
     channel_id: int,
     member_role_ids: list[int],
     guild_config: MultiplierConfig,
+    has_leetcode_boost: bool = False,
 ) -> int:
     """Return the XP to actually award after channel and role multipliers."""
     channel_mult = float(guild_config.channel_multipliers.get(str(channel_id), 1.0))
@@ -38,7 +39,10 @@ def compute_final_xp(
         ),
         default=1.0,
     )
-    final = int(base_xp * channel_mult * role_mult)
+    final = base_xp * channel_mult * role_mult
+    if has_leetcode_boost:
+        final *= 1.5
+    final = int(final)
     if base_xp > 0 and final < 1:
         return 1
     return final

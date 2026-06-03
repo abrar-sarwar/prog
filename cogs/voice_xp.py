@@ -114,9 +114,19 @@ class VoiceXP(commands.Cog):
 
         async with get_session_factory()() as session:
             config = await crud.get_or_create_guild_config(session, member.guild.id)
+            user = await crud.get_user(session, member.guild.id, member.id)
+            
+            # Check for daily LeetCode XP boost (rolling 24 hours)
+            has_leetcode_boost = False
+            if user is not None and user.leetcode_completed_at is not None:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                if (now - user.leetcode_completed_at).total_seconds() < 86400:
+                    has_leetcode_boost = True
+
             role_ids = [r.id for r in member.roles]
             final_xp = compute_final_xp(
-                VOICE_XP_PER_TICK, channel.id, role_ids, config
+                VOICE_XP_PER_TICK, channel.id, role_ids, config, has_leetcode_boost=has_leetcode_boost
             )
             change = await crud.add_voice_xp(
                 session, member.guild.id, member.id, final_xp

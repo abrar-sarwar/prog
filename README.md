@@ -98,6 +98,8 @@ Optional, set as you like:
 |---|---|
 | `/rank [user]` | Embed with level, total XP, in-level progress bar, server rank. Defaults to the invoker. |
 | `/leaderboard` | Paginated guild leaderboard, 10 per page. Footer always shows the invoker's own rank, even if they're off-page. |
+| `/leet` | Initiates a daily LeetCode challenge in the `#programming` channel, creating a public thread and prompting with a random question. |
+| `/leet-status [user]` | Shows a user's current streak, total solved challenges, active question/thread link, and remaining daily XP boost duration. |
 
 ### Admin (requires `Manage Server`)
 
@@ -116,6 +118,9 @@ Optional, set as you like:
 | `/set-role-multiplier <role> <multiplier>` | Set or, with `1.0`, remove the role's XP multiplier. |
 | `/show-config` | Ephemeral dump of the current guild configuration. |
 | `/force-leaderboard-update` | Run the weekly update immediately. Still respects the freeze date. |
+| `/leet-approve <user>` | Force-approves the selected user's active LeetCode daily challenge immediately and archives the thread. |
+| `/leet-modify <user> [streak] [total] [reset_daily]` | Set a user's streak or total completed challenges, or reset their daily completion state to allow a new question. |
+| `/leet-analytics <period>` | View stats on daily challenge threads opened, completed, and expired over the last day, week, or month. |
 
 Admin commands appear greyed out for non-mods in the Discord UI; the in-handler
 permission check is enforced server-side as well.

@@ -100,7 +100,16 @@ class MessageXP(commands.Cog):
 
             base_xp = random.randint(TEXT_XP_MIN, TEXT_XP_MAX)
             role_ids = [r.id for r in author.roles]
-            final_xp = compute_final_xp(base_xp, channel_id, role_ids, config)
+            
+            # Check for daily LeetCode XP boost (rolling 24 hours)
+            has_leetcode_boost = False
+            if user.leetcode_completed_at is not None:
+                if (now - user.leetcode_completed_at).total_seconds() < 86400:
+                    has_leetcode_boost = True
+
+            final_xp = compute_final_xp(
+                base_xp, channel_id, role_ids, config, has_leetcode_boost=has_leetcode_boost
+            )
             change = await crud.add_text_xp(
                 session, guild_id, author.id, final_xp, now
             )

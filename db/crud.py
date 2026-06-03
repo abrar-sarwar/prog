@@ -25,7 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.leveling import LEVEL_CAP, cumulative_xp_to_level, level_from_total_xp
-from db.models import GuildConfig, RoleReward, User
+from db.models import GuildConfig, RoleReward, User, LeetcodeQuestion, LeetcodeHistory
 
 
 # ---------------------------------------------------------------------------
@@ -522,3 +522,213 @@ async def list_role_rewards(
         .order_by(RoleReward.level.asc())
     )
     return (await session.execute(stmt)).scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# leetcode
+# ---------------------------------------------------------------------------
+
+
+async def get_leetcode_question(
+    session: AsyncSession, question_id: int
+) -> LeetcodeQuestion | None:
+    """Return the LeetcodeQuestion row for ``question_id`` or None."""
+    stmt = select(LeetcodeQuestion).where(LeetcodeQuestion.id == question_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_random_leetcode_question(
+    session: AsyncSession,
+) -> LeetcodeQuestion | None:
+    """Pick a random LeetcodeQuestion from the database."""
+    stmt = select(LeetcodeQuestion).order_by(func.random()).limit(1)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def assign_active_leetcode(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    question_id: int,
+    thread_id: int,
+    now: datetime,
+) -> None:
+    """Set the active leetcode question and thread for the user, and create history entry."""
+    user = await _lock_user(session, guild_id, user_id)
+    user.leetcode_active_question_id = question_id
+    user.leetcode_thread_id = thread_id
+    user.leetcode_thread_created_at = now
+
+    # Insert history log
+    log_entry = LeetcodeHistory(
+        user_id=user_id,
+        guild_id=guild_id,
+        question_id=question_id,
+        thread_id=thread_id,
+        opened_at=now,
+        status="opened",
+    )
+    session.add(log_entry)
+
+
+async def complete_leetcode_session(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    now: datetime,
+) -> User:
+    """Mark the active leetcode session as completed, update streak & total, and clean up active fields."""
+    user = await _lock_user(session, guild_id, user_id)
+    if user.leetcode_active_question_id is None:
+        return user
+
+    # Streak calculations:
+    # If the user completed a problem before, and it was in the last 48 hours, increment streak.
+    # Otherwise reset/set to 1.
+    if user.leetcode_completed_at is not None:
+        delta = now - user.leetcode_completed_at
+        if delta.total_seconds() <= 172800:  # 48 hours
+            user.leetcode_streak += 1
+        else:
+            user.leetcode_streak = 1
+    else:
+        user.leetcode_streak = 1
+
+    # Update completion stats
+    user.leetcode_completed_at = now
+    user.leetcode_total += 1
+
+    # Update history log
+    hist_stmt = (
+        select(LeetcodeHistory)
+        .where(
+            LeetcodeHistory.user_id == user_id,
+            LeetcodeHistory.guild_id == guild_id,
+            LeetcodeHistory.thread_id == user.leetcode_thread_id,
+            LeetcodeHistory.status == "opened",
+        )
+        .limit(1)
+    )
+    history = (await session.execute(hist_stmt)).scalar_one_or_none()
+    if history is not None:
+        history.closed_at = now
+        history.status = "completed"
+
+    # Reset active session fields
+    user.leetcode_active_question_id = None
+    user.leetcode_thread_id = None
+    user.leetcode_thread_created_at = None
+
+    return user
+
+
+async def expire_leetcode_session(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    now: datetime,
+) -> User:
+    """Clear active leetcode session fields for user and mark the history log entry as expired."""
+    user = await _lock_user(session, guild_id, user_id)
+    if user.leetcode_active_question_id is None:
+        return user
+
+    # Update history log
+    hist_stmt = (
+        select(LeetcodeHistory)
+        .where(
+            LeetcodeHistory.user_id == user_id,
+            LeetcodeHistory.guild_id == guild_id,
+            LeetcodeHistory.thread_id == user.leetcode_thread_id,
+            LeetcodeHistory.status == "opened",
+        )
+        .limit(1)
+    )
+    history = (await session.execute(hist_stmt)).scalar_one_or_none()
+    if history is not None:
+        history.closed_at = now
+        history.status = "expired"
+
+    # Reset active session fields
+    user.leetcode_active_question_id = None
+    user.leetcode_thread_id = None
+    user.leetcode_thread_created_at = None
+
+    return user
+
+
+async def get_active_leetcode_user_by_thread(
+    session: AsyncSession,
+    thread_id: int,
+) -> User | None:
+    """Find the User row having ``leetcode_thread_id == thread_id``."""
+    stmt = select(User).where(User.leetcode_thread_id == thread_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def list_expired_leetcode_sessions(
+    session: AsyncSession,
+    cutoff: datetime,
+) -> Sequence[User]:
+    """Find all users who have an active leetcode thread created before ``cutoff``."""
+    stmt = select(User).where(
+        User.leetcode_thread_id.is_not(None),
+        User.leetcode_thread_created_at < cutoff,
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def get_leetcode_analytics(
+    session: AsyncSession,
+    guild_id: int,
+    since: datetime,
+) -> dict[str, int]:
+    """Get count of completed and expired leetcode logs since ``since``."""
+    stmt_comp = select(func.count(LeetcodeHistory.id)).where(
+        LeetcodeHistory.guild_id == guild_id,
+        LeetcodeHistory.opened_at >= since,
+        LeetcodeHistory.status == "completed",
+    )
+    stmt_exp = select(func.count(LeetcodeHistory.id)).where(
+        LeetcodeHistory.guild_id == guild_id,
+        LeetcodeHistory.opened_at >= since,
+        LeetcodeHistory.status == "expired",
+    )
+    stmt_open = select(func.count(LeetcodeHistory.id)).where(
+        LeetcodeHistory.guild_id == guild_id,
+        LeetcodeHistory.opened_at >= since,
+        LeetcodeHistory.status == "opened",
+    )
+
+    completed = int((await session.execute(stmt_comp)).scalar_one())
+    expired = int((await session.execute(stmt_exp)).scalar_one())
+    opened = int((await session.execute(stmt_open)).scalar_one())
+
+    return {
+        "completed": completed,
+        "expired": expired,
+        "opened": opened,
+        "total": completed + expired + opened,
+    }
+
+
+async def modify_user_leetcode(
+    session: AsyncSession,
+    guild_id: int,
+    user_id: int,
+    streak: int | None = None,
+    total: int | None = None,
+    reset_daily: bool = False,
+) -> User:
+    """Modify user's leetcode statistics or reset their daily completion state."""
+    user = await _lock_user(session, guild_id, user_id)
+    if streak is not None:
+        user.leetcode_streak = max(0, streak)
+    if total is not None:
+        user.leetcode_total = max(0, total)
+    if reset_daily:
+        user.leetcode_completed_at = None
+        user.leetcode_active_question_id = None
+        user.leetcode_thread_id = None
+        user.leetcode_thread_created_at = None
+    return user
