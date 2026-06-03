@@ -144,9 +144,9 @@ class RankCardData:
     account_created_at: Optional[datetime] = None  # member.created_at
     text_xp_total: int = 0
     voice_xp_total: int = 0
-    # LeetCode /leet feature stats — rendered as an additive line at the bottom
-    # of the card (NOT a separate rank ladder). Default 0 keeps the card valid
-    # for users who've never done a /leet.
+    # LeetCode /leet feature stats — rendered as a small block under the LEVEL
+    # numeral, just above the progress bar (NOT a separate rank ladder).
+    # Default 0 keeps the card valid for users who've never done a /leet.
     leetcode_solved: int = 0
     leetcode_streak: int = 0
 
@@ -552,44 +552,43 @@ class _RankRenderer:
     # ---------- leetcode footer line ----------
 
     def _draw_leet_footer(self, canvas: Image.Image) -> None:
-        """Draw the additive LeetCode stats line at the bottom-right.
+        """Draw the LeetCode stats as a small block tucked under the LEVEL
+        numeral, just above the progress bar.
 
-        Sits on the same baseline as the progress caption (which is left-
-        aligned), so the LeetCode stats read as a line *underneath* the rank/
-        level info on the right edge — additive, not a separate ladder. This is
-        the sensible-default placement; the label/colours are easy to retune.
+        Left-aligned with the identity column so it reads as sitting beneath the
+        big level number: a small accent-dotted ``LEETCODE`` label with the
+        solved/streak value below it. Additive to the rank info, same single
+        progression (not a separate ladder); easy to retune.
         """
         draw = ImageDraw.Draw(canvas, "RGBA")
         bar_y = CANVAS_H - 116
-        cap_y = bar_y + PROGRESS_BAR_HEIGHT + 18  # same row as the % caption
+        rx = IDENTITY_COL_X
 
         solved = max(0, self.data.leetcode_solved)
         streak = max(0, self.data.leetcode_streak)
         if solved == 0 and streak == 0:
             value_text = "NO SOLVES YET"
         else:
-            value_text = f"{solved} SOLVED · {streak}D STREAK"
+            value_text = f"{solved} SOLVED, {streak}D STREAK"
 
-        label_text = "LEETCODE"
-        label_font = self._sans(26, weight=700)
-        value_font = self._sans(26, weight=700)
+        label_font = self._sans(24, weight=700)
+        value_font = self._sans(32, weight=700)
 
-        col_right = CANVAS_W - H_PAD
-        gap = 16
-        value_w = _text_width(draw, value_text, value_font)
-        label_w = _text_width(draw, label_text, label_font)
-        value_x = col_right - value_w
-        label_x = value_x - gap - label_w
-        # Accent dot anchor, matching the stats-column rhythm.
+        # Stack label above value, sitting just above the progress bar.
+        label_y = bar_y - 96
+        value_y = bar_y - 60
         dot = 12
         draw.rectangle(
-            (label_x - dot - 12, cap_y + 8, label_x - 12, cap_y + 8 + dot),
+            (rx, label_y + 6, rx + dot, label_y + 6 + dot),
             fill=self.accent + (255,),
         )
-        draw.text((label_x, cap_y), label_text, font=label_font, fill=TEXT_DIM)
         draw.text(
-            (value_x, cap_y), value_text, font=value_font,
-            fill=self.accent + (255,),
+            (rx + dot + 14, label_y), "LEETCODE", font=label_font, fill=TEXT_DIM
+        )
+        value_max_w = STATS_COL_X - rx - 24
+        value_text = _truncate(value_text, value_font, value_max_w)
+        draw.text(
+            (rx, value_y), value_text, font=value_font, fill=self.accent + (255,)
         )
 
     # ---------- text-fit helper ----------

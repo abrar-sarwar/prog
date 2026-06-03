@@ -104,7 +104,7 @@ class _VerifyView(discord.ui.View):
             return
         if profile is None:
             await interaction.followup.send(
-                "couldn't read that profile anymore — is the username still right?",
+                "couldn't read that profile anymore. is the username still right?",
                 ephemeral=True,
             )
             return
@@ -262,7 +262,7 @@ class Leet(commands.Cog):
         warn = ""
         if me is not None and role >= me.top_role:
             warn = (
-                f"\n\n⚠️ heads up: {role.mention} is above my highest role, so i "
+                f"\n\nheads up: {role.mention} is above my highest role, so i "
                 "can't assign it. move prog's role above it in Server Settings → Roles."
             )
         await interaction.response.send_message(
@@ -340,7 +340,7 @@ class Leet(commands.Cog):
                 f"2. put this code anywhere in your **bio / summary**:\n\n"
                 f"**`{code}`**\n\n"
                 f"3. save it, then hit the button below\n\n"
-                f"linking **{profile.username}** — you can delete the code right "
+                f"linking **{profile.username}**. you can delete the code right "
                 "after it verifies."
             ),
             color=discord.Color.blurple(),
@@ -374,7 +374,7 @@ class Leet(commands.Cog):
         # Config-presence check.
         if leet_channel_id is None:
             await interaction.followup.send(
-                "leetcode channel isn't set — an admin needs to run `/setup-leet` first.",
+                "leetcode channel isn't set. an admin needs to run `/setup-leet` first.",
                 ephemeral=True,
             )
             return
@@ -429,7 +429,7 @@ class Leet(commands.Cog):
         problem = random_problem(exclude_slugs=solved_slugs) or random_problem()
         if problem is None:
             await interaction.followup.send(
-                "the problem pool is empty — tell an admin.", ephemeral=True
+                "the problem pool is empty, tell an admin.", ephemeral=True
             )
             return
 
@@ -437,7 +437,7 @@ class Leet(commands.Cog):
         channel = guild.get_channel(leet_channel_id)
         if not isinstance(channel, discord.TextChannel):
             await interaction.followup.send(
-                "the configured leetcode channel is missing or not a text channel — "
+                "the configured leetcode channel is missing or not a text channel. "
                 "an admin should re-run `/setup-leet`.",
                 ephemeral=True,
             )
@@ -484,7 +484,7 @@ class Leet(commands.Cog):
 
         await self._post_problem(thread, member, problem, expires_at)
         await interaction.followup.send(
-            f"your problem's in {thread.mention} — good luck.", ephemeral=True
+            f"your problem's in {thread.mention}. good luck.", ephemeral=True
         )
 
         self._start_session(
@@ -505,7 +505,7 @@ class Leet(commands.Cog):
             url=problem.url,
             description=(
                 f"difficulty: **{problem.difficulty}**\n\n"
-                f"solve it on leetcode and get it **accepted** — i'll detect it "
+                f"solve it on leetcode and get it **accepted**. i'll detect it "
                 f"automatically, no screenshots needed.\n"
                 f"you've got until <t:{int(expires_at.timestamp())}:t> "
                 f"(<t:{int(expires_at.timestamp())}:R>)."
@@ -516,7 +516,7 @@ class Leet(commands.Cog):
             await thread.send(
                 content=(
                     f"{member.mention} here's your problem. want a buddy? @mention "
-                    "them in here — i won't add anyone myself."
+                    "them in here, i won't add anyone myself."
                 ),
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(
@@ -650,9 +650,9 @@ class Leet(commands.Cog):
         thread = self.bot.get_channel(thread_id)
         if isinstance(thread, discord.Thread):
             note = (
-                "time's up on this one — "
+                "time's up on this one. "
                 if reason == "time"
-                else "stopped watching since you went quiet — "
+                else "stopped watching since you went quiet. "
             )
             try:
                 await thread.send(
@@ -737,19 +737,19 @@ class Leet(commands.Cog):
                 role_id,
                 member.guild.id,
             )
-            return "the configured reward role is missing — tell an admin."
+            return "the configured reward role is missing, tell an admin."
         try:
             await member.add_roles(role, reason="prog: leet solve reward")
         except discord.Forbidden:
             log.error(
-                "leet reward: FORBIDDEN adding %s (id=%s) to %s — move prog's role "
+                "leet reward: FORBIDDEN adding %s (id=%s) to %s. move prog's role "
                 "above it in Server Settings → Roles.",
                 role.name,
                 role.id,
                 member.id,
             )
             return (
-                f"couldn't give you {role.mention} — prog's role needs to sit above "
+                f"couldn't give you {role.mention}. prog's role needs to sit above "
                 "it (admin fix)."
             )
         except discord.HTTPException as exc:
@@ -792,12 +792,12 @@ class Leet(commands.Cog):
             return
         change = result.change
         lines = [
-            f"accepted ✅ that's **+{result.reward_xp:,} xp**",
-            f"🔥 streak: **{result.new_streak}** day(s) · total solved: "
+            f"accepted, that's **+{result.reward_xp:,} xp**",
+            f"streak: **{result.new_streak}** day(s), total solved: "
             f"**{change.user.leetcode_solved_total}**",
         ]
         if change.leveled_up:
-            lines.append(f"📈 you leveled up to **{change.new_level}**")
+            lines.append(f"you leveled up to **{change.new_level}**")
         lines.append(role_note)
         try:
             await thread.send("\n".join(lines))
