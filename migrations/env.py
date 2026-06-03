@@ -1,8 +1,10 @@
 import asyncio
+import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -11,6 +13,11 @@ from alembic import context
 
 # Make the project root importable so we can pull in our own modules below.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Load the env file named by ENV_FILE (e.g. ".env.dev" for the isolated test
+# database), defaulting to ".env". Done before importing config so migrations
+# read DATABASE_URL from the same source the bot does.
+load_dotenv(os.getenv("ENV_FILE", ".env"))
 
 from config import load_config  # noqa: E402
 from db.models import Base  # noqa: E402

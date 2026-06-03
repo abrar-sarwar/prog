@@ -16,3 +16,5 @@ venv/
 .DS_Store
 Thumbs.db
 leaderboard_preview_*.png
+.env.dev
+

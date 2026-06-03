@@ -12,7 +12,9 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load the env file named by ENV_FILE (e.g. ".env.dev" for the isolated test
+# database), defaulting to ".env" so the production "prog" setup is unaffected.
+load_dotenv(os.getenv("ENV_FILE", ".env"))
 
 
 @dataclass(frozen=True)
