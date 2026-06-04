@@ -219,6 +219,71 @@ class _ReverifyConfirmView(discord.ui.View):
         self.stop()
 
 
+class _ConfirmResetView(discord.ui.View):
+    """'are you sure?' confirmation for resetting leet stats.
+
+    ``target_user`` is the member to reset, or None to reset the whole guild.
+    """
+
+    def __init__(
+        self,
+        invoker_id: int,
+        target_user: discord.Member | None,
+    ) -> None:
+        super().__init__(timeout=60)
+        self.invoker_id = invoker_id
+        self.target_user = target_user
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "this isn't your confirmation.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="yes, reset", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not await self._guard(interaction):
+            return
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        await interaction.response.edit_message(view=self)
+
+        guild_id = interaction.guild_id
+        assert guild_id is not None
+        async with get_session_factory()() as session:
+            if self.target_user is not None:
+                n = await crud.reset_leet_stats_for_user(
+                    session, guild_id, self.target_user.id
+                )
+            else:
+                n = await crud.reset_leet_stats_for_guild(session, guild_id)
+            await session.commit()
+
+        who = self.target_user.mention if self.target_user else "the whole server"
+        await interaction.followup.send(
+            f"reset leetcode stats for {who} ({n} member(s) affected). "
+            "xp and levels were left as-is.",
+            ephemeral=True,
+        )
+        self.stop()
+
+    @discord.ui.button(label="cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not await self._guard(interaction):
+            return
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("ok, nothing was reset.", ephemeral=True)
+        self.stop()
+
+
 # ---------------------------------------------------------------------------
 # Cog
 # ---------------------------------------------------------------------------
@@ -471,6 +536,38 @@ class Leet(commands.Cog):
             )
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="reset-leet-stats",
+        description="Reset LeetCode solved/streak stats for a member or the whole server",
+    )
+    @app_commands.describe(
+        user="Member to reset (leave empty to reset everyone in this server)"
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def reset_leet_stats(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member | None = None,
+    ) -> None:
+        """Confirm, then zero leet stats for one member or the whole guild."""
+        assert interaction.guild is not None
+        scope = user.mention if user is not None else "**everyone in this server**"
+        embed = discord.Embed(
+            title="reset leetcode stats?",
+            description=(
+                f"this resets solved count, streak, and last solve date for {scope}. "
+                "earned xp and levels are not touched. this can't be undone."
+            ),
+            color=discord.Color.orange(),
+        )
+        await interaction.response.send_message(
+            embed=embed,
+            view=_ConfirmResetView(interaction.user.id, user),
+            ephemeral=True,
+        )
 
     # ------------------------------------------------------------------
     # /leetverify

@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import NamedTuple, Sequence
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -924,3 +924,46 @@ async def count_leet_participants(session: AsyncSession, guild_id: int) -> int:
         User.guild_id == guild_id, User.leetcode_solved_total > 0
     )
     return int((await session.execute(stmt)).scalar_one())
+
+
+_LEET_STATS_RESET = {
+    "leetcode_solved_total": 0,
+    "leetcode_streak": 0,
+    "leetcode_last_solve_date": None,
+}
+"""Default values the /leet stats reset writes. XP/level are deliberately
+untouched — only the leet engagement counters are cleared."""
+
+
+async def reset_leet_stats_for_user(
+    session: AsyncSession, guild_id: int, user_id: int
+) -> int:
+    """Zero a single member's leet stats. Returns rows affected (0 or 1)."""
+    stmt = (
+        update(User)
+        .where(User.guild_id == guild_id, User.user_id == user_id)
+        .values(**_LEET_STATS_RESET)
+    )
+    return (await session.execute(stmt)).rowcount or 0
+
+
+async def reset_leet_stats_for_guild(
+    session: AsyncSession, guild_id: int
+) -> int:
+    """Zero leet stats for every member in a guild who has any.
+
+    Returns the number of members actually reset (only rows with non-default
+    stats are touched, so the count reflects real participants)."""
+    stmt = (
+        update(User)
+        .where(
+            User.guild_id == guild_id,
+            or_(
+                User.leetcode_solved_total != 0,
+                User.leetcode_streak != 0,
+                User.leetcode_last_solve_date.is_not(None),
+            ),
+        )
+        .values(**_LEET_STATS_RESET)
+    )
+    return (await session.execute(stmt)).rowcount or 0
