@@ -603,6 +603,12 @@ class Leet(commands.Cog):
                 ephemeral=True,
             )
             return
+        # Channel-lock: verification only happens in the configured channel.
+        if interaction.channel_id != leet_channel_id:
+            await interaction.followup.send(
+                f"`/leetverify` only works in <#{leet_channel_id}>.", ephemeral=True
+            )
+            return
 
         # Verify-once: if they already have a link, don't re-run the flow —
         # confirm it's still their account, with a reverify escape hatch.
