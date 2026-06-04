@@ -588,11 +588,24 @@ class Leet(commands.Cog):
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # Verify-once: if they already have a link, don't re-run the flow —
-        # confirm it's still their account, with a reverify escape hatch.
         async with get_session_factory()() as session:
+            config = await crud.get_or_create_guild_config(
+                session, interaction.guild.id
+            )
+            leet_channel_id = config.leetcode_channel_id
             link = await crud.get_leetcode_link(session, interaction.user.id)
             await session.commit()
+
+        # Config-presence gate: nothing in the feature works until /setup-leet.
+        if leet_channel_id is None:
+            await interaction.followup.send(
+                "leetcode channel isn't set. an admin needs to run `/setup-leet` first.",
+                ephemeral=True,
+            )
+            return
+
+        # Verify-once: if they already have a link, don't re-run the flow —
+        # confirm it's still their account, with a reverify escape hatch.
         if link is not None:
             await interaction.followup.send(
                 embed=discord.Embed(
