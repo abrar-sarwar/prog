@@ -583,7 +583,7 @@ class Admin(commands.Cog):
                 session, interaction.guild.id, channel.id
             )
             # Channel change invalidates the existing message ID; clear it so
-            # the next weekly tick creates a fresh post in the new channel.
+            # the forced push below creates a fresh post in the new channel.
             await crud.set_leaderboard_message(
                 session, interaction.guild.id, None
             )
@@ -593,11 +593,19 @@ class Admin(commands.Cog):
                 title="Leaderboard channel set",
                 description=(
                     f"Weekly leaderboard will post in {channel.mention}. "
-                    "A new message will be created on the next Saturday-noon update."
+                    "Posting the current standings now."
                 ),
                 color=discord.Color.blurple(),
             )
         )
+        # Push the leaderboard immediately so the channel isn't empty until the
+        # next update. force=True bypasses the cache comparison; the cleared
+        # message ID above means this sends a fresh post in the new channel.
+        leaderboard_cog = self.bot.get_cog("LeaderboardChannel")
+        if leaderboard_cog is not None:
+            await leaderboard_cog._check_and_maybe_update(
+                interaction.guild.id, force=True
+            )
 
     @app_commands.command(
         name="setup-levelup-channel",
