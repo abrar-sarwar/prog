@@ -32,6 +32,11 @@ from core.leaderboard_image import (
     render_png as render_leaderboard_png,
 )
 from core.rank_image import RankCardData, render_rank_png
+from cogs.checks import (
+    ProgsuvianRequired,
+    progsuvian_required_message,
+    requires_progsuvian,
+)
 from db import crud
 from db.engine import get_session_factory
 
@@ -67,12 +72,36 @@ class UserCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
+    async def cog_app_command_error(
+        self,
+        interaction: discord.Interaction,
+        error: app_commands.AppCommandError,
+    ) -> None:
+        """Clean ephemeral replies for command errors (mirrors the other cogs)."""
+        if isinstance(error, ProgsuvianRequired):
+            msg = progsuvian_required_message(error.role_id)
+        elif isinstance(error, app_commands.CheckFailure):
+            msg = "You can't use this command here."
+        else:
+            log.exception("user commands cog error: %s", error)
+            msg = "Something went wrong - check the bot logs."
+        none = discord.AllowedMentions.none()
+        try:
+            await interaction.response.send_message(
+                msg, ephemeral=True, allowed_mentions=none
+            )
+        except discord.InteractionResponded:
+            await interaction.followup.send(
+                msg, ephemeral=True, allowed_mentions=none
+            )
+
     # ------------------------------------------------------------------
     # /rank
     # ------------------------------------------------------------------
 
     @app_commands.command(name="rank", description="Show your trophy card")
     @app_commands.describe(user="Whose rank to show (defaults to yourself)")
+    @requires_progsuvian()
     async def rank(
         self,
         interaction: discord.Interaction,
@@ -158,6 +187,7 @@ class UserCommands(commands.Cog):
         name="leaderboard",
         description="Show the server's top 10",
     )
+    @requires_progsuvian()
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         """Render the server's top-10 podium board as an ephemeral image.
 

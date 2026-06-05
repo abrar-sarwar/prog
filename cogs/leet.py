@@ -57,6 +57,11 @@ from core.leetcode_client import (
 )
 from core.leetcode_problems import random_problem
 from core.leveling import LEVEL_CAP
+from cogs.checks import (
+    ProgsuvianRequired,
+    progsuvian_required_message,
+    requires_progsuvian,
+)
 from db import crud
 from db.engine import get_session_factory
 
@@ -311,17 +316,24 @@ class Leet(commands.Cog):
         error: app_commands.AppCommandError,
     ) -> None:
         """Clean ephemeral replies for command errors (mirrors the other cogs)."""
-        if isinstance(error, app_commands.MissingPermissions):
+        if isinstance(error, ProgsuvianRequired):
+            msg = progsuvian_required_message(error.role_id)
+        elif isinstance(error, app_commands.MissingPermissions):
             msg = "You need the **Manage Server** permission for this."
         elif isinstance(error, app_commands.CheckFailure):
             msg = "You can't use this command here."
         else:
             log.exception("leet cog command error: %s", error)
             msg = "Something went wrong - check the bot logs."
+        none = discord.AllowedMentions.none()
         try:
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.response.send_message(
+                msg, ephemeral=True, allowed_mentions=none
+            )
         except discord.InteractionResponded:
-            await interaction.followup.send(msg, ephemeral=True)
+            await interaction.followup.send(
+                msg, ephemeral=True, allowed_mentions=none
+            )
 
     # ------------------------------------------------------------------
     # Admin setup
@@ -579,6 +591,7 @@ class Leet(commands.Cog):
     )
     @app_commands.describe(leetcode_username="Your LeetCode username")
     @app_commands.guild_only()
+    @requires_progsuvian()
     async def leetverify(
         self,
         interaction: discord.Interaction,
@@ -703,6 +716,7 @@ class Leet(commands.Cog):
         description="Get a random LeetCode problem to solve on leetcode.com",
     )
     @app_commands.guild_only()
+    @requires_progsuvian()
     async def leet(self, interaction: discord.Interaction) -> None:
         """Start a /leet session: gate, pick a problem, open a private thread."""
         assert interaction.guild is not None

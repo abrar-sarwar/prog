@@ -94,10 +94,16 @@ Optional, set as you like:
 
 ### User
 
+These require the `progsuvian` base role (assigned automatically on join /
+first message). If a guild hasn't run `/setup-progsuvian` yet, the gate
+fails open and anyone can use them.
+
 | Command | What it does |
 |---|---|
 | `/rank [user]` | Embed with level, total XP, in-level progress bar, server rank. Defaults to the invoker. |
 | `/leaderboard` | Paginated guild leaderboard, 10 per page. Footer always shows the invoker's own rank, even if they're off-page. |
+| `/leet` | Get a random LeetCode problem in a private thread (needs `/setup-leet`). |
+| `/leetverify <username>` | Link your LeetCode account so `/leet` can detect solves (needs `/setup-leet`). |
 
 ### Admin (requires `Manage Server`)
 
