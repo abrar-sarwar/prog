@@ -755,6 +755,21 @@ async def expire_assignment(
     return True
 
 
+async def extend_assignment_expiry(
+    session: AsyncSession, assignment_id: int, new_expires_at: datetime
+) -> bool:
+    """Push an active assignment's deadline out to ``new_expires_at``.
+
+    Persists a keep-alive extension so a bot restart resumes the session with the
+    extended deadline rather than the original one. No-op (returns False) if the
+    row is no longer active."""
+    assignment = await session.get(LeetcodeAssignment, assignment_id)
+    if assignment is None or assignment.status != "active":
+        return False
+    assignment.expires_at = new_expires_at
+    return True
+
+
 # ---------------------------------------------------------------------------
 # LeetCode feature: solve recording (XP + stats, race-safe)
 # ---------------------------------------------------------------------------

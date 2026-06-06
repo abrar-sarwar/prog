@@ -63,8 +63,19 @@ restart between dispatch and edit, missed event, etc.)."""
 # reward values are tunable here.
 
 LEET_SESSION_MINUTES: int = 60
-"""How long a /leet session stays open. The clock starts at assignment;
-``expires_at = assigned_at + LEET_SESSION_MINUTES``. Never extended."""
+"""Base length of a /leet session. The clock starts at assignment
+(``expires_at = assigned_at + LEET_SESSION_MINUTES``) and can be extended in
+``LEET_EXTEND_MINUTES`` chunks via the keep-alive prompt below."""
+
+LEET_EXTEND_MINUTES: int = 30
+"""Minutes added to a session's deadline each time the member taps the
+keep-alive ('+30 min') button."""
+
+LEET_EXTEND_PROMPT_BEFORE_SECONDS: int = 600
+"""How long before the current deadline the keep-alive prompt is posted (10
+min). Tapping it extends the deadline; ignoring it lets the session expire. A
+fresh prompt is armed before each new deadline, so the loop continues as long
+as the member keeps tapping."""
 
 LEET_POLL_MIN_SECONDS: int = 30
 """Lower bound of the per-session detection poll interval."""

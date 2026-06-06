@@ -28,7 +28,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable
 
 import discord
 from discord import app_commands
@@ -36,6 +38,8 @@ from discord.ext import commands, tasks
 
 from cogs.onboarding import ensure_member_initialized
 from core.constants import (
+    LEET_EXTEND_MINUTES,
+    LEET_EXTEND_PROMPT_BEFORE_SECONDS,
     LEET_GRANT_SWEEP_SECONDS,
     LEET_POLL_MAX_SECONDS,
     LEET_POLL_MIN_SECONDS,
@@ -138,6 +142,58 @@ class _VerifyView(discord.ui.View):
         await interaction.followup.send(
             f"linked to **{profile.username}**. you can remove the code from your "
             "bio now. run `/leet` in the leetcode channel whenever you're ready.",
+            ephemeral=True,
+        )
+        self.stop()
+
+
+@dataclass
+class _SessionClock:
+    """Mutable deadline shared between a session's poll loop and its extend button.
+
+    ``deadline`` is the live expiry the loop checks each tick; the button pushes
+    it out by ``LEET_EXTEND_MINUTES``. ``prompted`` guards against posting more
+    than one keep-alive prompt per window — it's reset on each extension so the
+    loop arms a fresh prompt before the new deadline.
+    """
+
+    deadline: datetime
+    prompted: bool = False
+
+
+class _ExtendView(discord.ui.View):
+    """'+30 min' keep-alive button posted shortly before a session expires."""
+
+    def __init__(
+        self,
+        user_id: int,
+        clock: "_SessionClock",
+        on_extend: "Callable[[datetime], Awaitable[None]]",
+    ) -> None:
+        super().__init__(timeout=float(LEET_EXTEND_PROMPT_BEFORE_SECONDS))
+        self.user_id = user_id
+        self.clock = clock
+        self.on_extend = on_extend  # persists the new deadline
+
+    @discord.ui.button(label="yep, +30 min", style=discord.ButtonStyle.green)
+    async def extend(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "this isn't your session.", ephemeral=True
+            )
+            return
+        self.clock.deadline = self.clock.deadline + timedelta(
+            minutes=LEET_EXTEND_MINUTES
+        )
+        self.clock.prompted = False  # let the loop arm a fresh prompt before the new deadline
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+        await self.on_extend(self.clock.deadline)
+        await interaction.followup.send(
+            f"extended — you've got until <t:{int(self.clock.deadline.timestamp())}:t> "
+            f"(<t:{int(self.clock.deadline.timestamp())}:R>) now.",
             ephemeral=True,
         )
         self.stop()
@@ -850,21 +906,30 @@ class Leet(commands.Cog):
         assigned_at: datetime,
         expires_at: datetime,
     ) -> None:
-        """Poll for the accepted submission until solve or the full-hour expiry.
+        """Poll for the accepted submission until solve or the (extendable) expiry.
 
         Polls the user's recent accepted submissions on a jittered interval and
-        stops the instant the session completes or its one-hour window elapses.
-        The session always runs the full ``LEET_SESSION_MINUTES`` — there is no
-        early "are you there?" cutoff, since members are off solving on
-        leetcode.com rather than watching the Discord thread.
+        stops the instant the session completes or its deadline passes. The base
+        window is ``LEET_SESSION_MINUTES``; ``LEET_EXTEND_PROMPT_BEFORE_SECONDS``
+        before the current deadline the loop posts a '+30 min' button. Tapping it
+        pushes ``clock.deadline`` out by ``LEET_EXTEND_MINUTES`` and re-arms the
+        prompt before the new deadline, so a member can keep extending. Ignoring
+        it lets the session expire normally.
         """
         assigned_epoch = int(assigned_at.timestamp())
+        clock = _SessionClock(deadline=expires_at)
+        prompt_lead = timedelta(seconds=LEET_EXTEND_PROMPT_BEFORE_SECONDS)
         try:
             while True:
                 now = datetime.now(timezone.utc)
-                if now >= expires_at:
+                if now >= clock.deadline:
                     await self._expire_session(assignment_id, thread_id)
                     return
+                if not clock.prompted and now >= clock.deadline - prompt_lead:
+                    clock.prompted = True
+                    await self._post_extend_prompt(
+                        thread_id, member, clock, assignment_id
+                    )
 
                 try:
                     recent = await fetch_recent_accepted(
@@ -890,8 +955,43 @@ class Leet(commands.Cog):
         finally:
             self._sessions.pop(assignment_id, None)
 
+    async def _post_extend_prompt(
+        self,
+        thread_id: int,
+        member: discord.Member,
+        clock: _SessionClock,
+        assignment_id: int,
+    ) -> None:
+        """Post the '+30 min' keep-alive button shortly before the deadline."""
+        thread = self.bot.get_channel(thread_id)
+        if not isinstance(thread, discord.Thread):
+            return
+
+        async def _persist(new_deadline: datetime) -> None:
+            # Persist the extension so a restart resumes with the new deadline.
+            async with get_session_factory()() as session:
+                await crud.extend_assignment_expiry(
+                    session, assignment_id, new_deadline
+                )
+                await session.commit()
+
+        try:
+            await thread.send(
+                content=(
+                    f"{member.mention} still on it? tap to add "
+                    f"{LEET_EXTEND_MINUTES} more minutes — otherwise this wraps up "
+                    f"<t:{int(clock.deadline.timestamp())}:R>."
+                ),
+                view=_ExtendView(member.id, clock, _persist),
+                allowed_mentions=discord.AllowedMentions(
+                    users=True, roles=False, everyone=False
+                ),
+            )
+        except discord.HTTPException as exc:
+            log.warning("leet: extend prompt failed in %s: %s", thread_id, exc)
+
     async def _expire_session(self, assignment_id: int, thread_id: int) -> None:
-        """Mark an assignment expired (its hour elapsed) and archive its thread."""
+        """Mark an assignment expired (deadline passed) and archive its thread."""
         async with get_session_factory()() as session:
             changed = await crud.expire_assignment(session, assignment_id)
             await session.commit()
