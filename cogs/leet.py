@@ -11,8 +11,8 @@ Commands:
 
 * ``/leetverify <username>`` - link a LeetCode account by dropping a one-time
   ``progsu-XXXX`` code in the profile bio.
-* ``/leet``                  - start a session (gated on setup + verification +
-  one-attempt-per-UTC-day).
+* ``/leet``                  - start a session (gated on setup + verification;
+  no daily cap, but one active session at a time).
 * ``/setup-leet <channel>``        - admin: set the designated channel.
 * ``/setup-leet-reward <role>``    - admin: set the timed reward role.
 
@@ -36,8 +36,6 @@ from discord.ext import commands, tasks
 
 from cogs.onboarding import ensure_member_initialized
 from core.constants import (
-    LEET_ARE_YOU_THERE_MINUTES,
-    LEET_ARE_YOU_THERE_WAIT_SECONDS,
     LEET_GRANT_SWEEP_SECONDS,
     LEET_POLL_MAX_SECONDS,
     LEET_POLL_MIN_SECONDS,
@@ -141,32 +139,6 @@ class _VerifyView(discord.ui.View):
             f"linked to **{profile.username}**. you can remove the code from your "
             "bio now. run `/leet` in the leetcode channel whenever you're ready.",
             ephemeral=True,
-        )
-        self.stop()
-
-
-class _StillHereView(discord.ui.View):
-    """'still here' button for the are-you-there check inside a session."""
-
-    def __init__(self, user_id: int, event: asyncio.Event) -> None:
-        super().__init__(timeout=float(LEET_ARE_YOU_THERE_WAIT_SECONDS))
-        self.user_id = user_id
-        self.event = event
-
-    @discord.ui.button(label="yep, still on it", style=discord.ButtonStyle.green)
-    async def confirm(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "this isn't your session.", ephemeral=True
-            )
-            return
-        self.event.set()
-        button.disabled = True
-        await interaction.response.edit_message(view=self)
-        await interaction.followup.send(
-            "nice, keep going. the hour doesn't reset though.", ephemeral=True
         )
         self.stop()
 
@@ -878,40 +850,20 @@ class Leet(commands.Cog):
         assigned_at: datetime,
         expires_at: datetime,
     ) -> None:
-        """Poll for the accepted submission until solve, expiry, or no-response.
+        """Poll for the accepted submission until solve or the full-hour expiry.
 
         Polls the user's recent accepted submissions on a jittered interval and
-        stops the instant the session completes or expires. At
-        ``LEET_ARE_YOU_THERE_MINUTES`` in, pings the user once; if they don't
-        confirm within ``LEET_ARE_YOU_THERE_WAIT_SECONDS`` polling stops early.
-        Confirming does NOT extend the one-hour clock.
+        stops the instant the session completes or its one-hour window elapses.
+        The session always runs the full ``LEET_SESSION_MINUTES`` — there is no
+        early "are you there?" cutoff, since members are off solving on
+        leetcode.com rather than watching the Discord thread.
         """
         assigned_epoch = int(assigned_at.timestamp())
-        are_you_there_at = assigned_at + timedelta(minutes=LEET_ARE_YOU_THERE_MINUTES)
-        still_here = asyncio.Event()
-        pinged = False
-        ping_deadline: datetime | None = None
         try:
             while True:
                 now = datetime.now(timezone.utc)
                 if now >= expires_at:
-                    await self._expire_session(assignment_id, thread_id, "time")
-                    return
-                if not pinged and now >= are_you_there_at:
-                    pinged = True
-                    ping_deadline = now + timedelta(
-                        seconds=LEET_ARE_YOU_THERE_WAIT_SECONDS
-                    )
-                    await self._post_are_you_there(thread_id, member, still_here)
-                if (
-                    pinged
-                    and not still_here.is_set()
-                    and ping_deadline is not None
-                    and now >= ping_deadline
-                ):
-                    await self._expire_session(
-                        assignment_id, thread_id, "no response"
-                    )
+                    await self._expire_session(assignment_id, thread_id)
                     return
 
                 try:
@@ -938,29 +890,8 @@ class Leet(commands.Cog):
         finally:
             self._sessions.pop(assignment_id, None)
 
-    async def _post_are_you_there(
-        self, thread_id: int, member: discord.Member, event: asyncio.Event
-    ) -> None:
-        """Ping the user mid-session to confirm they're still working."""
-        thread = self.bot.get_channel(thread_id)
-        if not isinstance(thread, discord.Thread):
-            return
-        try:
-            await thread.send(
-                content=f"{member.mention} still working on it? tap the button so i "
-                "keep watching.",
-                view=_StillHereView(member.id, event),
-                allowed_mentions=discord.AllowedMentions(
-                    users=True, roles=False, everyone=False
-                ),
-            )
-        except discord.HTTPException as exc:
-            log.warning("leet: are-you-there post failed in %s: %s", thread_id, exc)
-
-    async def _expire_session(
-        self, assignment_id: int, thread_id: int, reason: str
-    ) -> None:
-        """Mark an assignment expired and archive its thread."""
+    async def _expire_session(self, assignment_id: int, thread_id: int) -> None:
+        """Mark an assignment expired (its hour elapsed) and archive its thread."""
         async with get_session_factory()() as session:
             changed = await crud.expire_assignment(session, assignment_id)
             await session.commit()
@@ -968,19 +899,15 @@ class Leet(commands.Cog):
             return  # already completed/expired elsewhere
         thread = self.bot.get_channel(thread_id)
         if isinstance(thread, discord.Thread):
-            note = (
-                "time's up on this one. "
-                if reason == "time"
-                else "stopped watching since you went quiet. "
-            )
             try:
                 await thread.send(
-                    f"{note}no accepted submission detected. you can try again tomorrow."
+                    "time's up on this one — no accepted submission detected. "
+                    "you can run `/leet` again whenever."
                 )
                 await thread.edit(archived=True)
             except discord.HTTPException as exc:
                 log.warning("leet: expire/archive failed for %s: %s", thread_id, exc)
-        log.info("leet session %s expired (%s)", assignment_id, reason)
+        log.info("leet session %s expired (time)", assignment_id)
 
     # ------------------------------------------------------------------
     # Reward
@@ -1158,7 +1085,7 @@ class Leet(commands.Cog):
             member = guild.get_member(a.discord_user_id) if guild else None
             if guild is None or member is None or a.thread_id is None:
                 # Can't resume — expire it so it doesn't dangle forever.
-                await self._expire_session(a.id, a.thread_id or 0, "time")
+                await self._expire_session(a.id, a.thread_id or 0)
                 continue
             link_username = None
             async with get_session_factory()() as session:
@@ -1166,7 +1093,7 @@ class Leet(commands.Cog):
                 link_username = link.leetcode_username if link else None
                 await session.commit()
             if link_username is None or a.expires_at <= now:
-                await self._expire_session(a.id, a.thread_id, "time")
+                await self._expire_session(a.id, a.thread_id)
                 continue
             self._start_session(
                 member, a.id, a.thread_id, a.problem_slug,

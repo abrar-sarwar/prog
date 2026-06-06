@@ -66,14 +66,6 @@ LEET_SESSION_MINUTES: int = 60
 """How long a /leet session stays open. The clock starts at assignment;
 ``expires_at = assigned_at + LEET_SESSION_MINUTES``. Never extended."""
 
-LEET_ARE_YOU_THERE_MINUTES: int = 30
-"""Minutes into a session at which the bot pings the user in the thread to
-confirm they're still working (the "are you there?" check)."""
-
-LEET_ARE_YOU_THERE_WAIT_SECONDS: int = 300
-"""How long the user has to respond to the "are you there?" ping before the
-bot stops polling early and lets the session quietly expire (default 5 min)."""
-
 LEET_POLL_MIN_SECONDS: int = 30
 """Lower bound of the per-session detection poll interval."""
 
