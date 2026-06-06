@@ -26,7 +26,11 @@ from dataclasses import dataclass
 
 import aiohttp
 
-from core.constants import LEET_HTTP_TIMEOUT_SECONDS, LEET_USER_AGENT
+from core.constants import (
+    LEET_ALL_PROBLEMS_URL,
+    LEET_HTTP_TIMEOUT_SECONDS,
+    LEET_USER_AGENT,
+)
 
 log = logging.getLogger(__name__)
 
@@ -197,3 +201,40 @@ async def fetch_recent_accepted(
     if not isinstance(rows, list):
         return []
     return rows
+
+
+async def fetch_all_problems_payload() -> dict:
+    """GET LeetCode's public problem list and return the raw JSON object.
+
+    This is the ``/api/problems/all/`` REST endpoint (not GraphQL); its payload
+    carries a ``stat_status_pairs`` array with each problem's slug, title,
+    difficulty level, and ``paid_only`` flag. Parsing/filtering into the free
+    pool lives in :func:`core.leetcode_problems.parse_problem_list` so it stays
+    pure and unit-testable. The payload is ~1-2 MB, so a more generous timeout
+    than the GraphQL calls is used. Raises :class:`LeetCodeUnavailable` on any
+    transport/HTTP error.
+    """
+    headers = {
+        "User-Agent": LEET_USER_AGENT,
+        "Accept": "application/json",
+        "Referer": "https://leetcode.com/problemset/all/",
+    }
+    timeout = aiohttp.ClientTimeout(total=LEET_HTTP_TIMEOUT_SECONDS * 3)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(LEET_ALL_PROBLEMS_URL, headers=headers) as resp:
+                if resp.status != 200:
+                    text = (await resp.text())[:200]
+                    raise LeetCodeUnavailable(
+                        f"problem list returned HTTP {resp.status}: {text}"
+                    )
+                body = await resp.json(content_type=None)
+    except aiohttp.ClientError as exc:
+        raise LeetCodeUnavailable(
+            f"network error fetching problem list: {exc}"
+        ) from exc
+    except (TimeoutError, __import__("asyncio").TimeoutError) as exc:
+        raise LeetCodeUnavailable("timed out fetching problem list") from exc
+    if not isinstance(body, dict):
+        raise LeetCodeUnavailable("problem list response was not a JSON object")
+    return body

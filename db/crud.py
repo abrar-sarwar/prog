@@ -19,12 +19,12 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import NamedTuple, Sequence
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.leetcode import compute_reward_xp, compute_streak_after_solve
+from core.leetcode import compute_solve_payout
 from core.leveling import LEVEL_CAP, cumulative_xp_to_level, level_from_total_xp
 from db.models import (
     GuildConfig,
@@ -673,25 +673,6 @@ async def get_active_assignment(
     return (await session.execute(stmt)).scalars().first()
 
 
-async def count_assignments_since(
-    session: AsyncSession,
-    discord_user_id: int,
-    guild_id: int,
-    since: datetime,
-) -> int:
-    """Count assignments for this (user, guild) created at/after ``since``.
-
-    Used to enforce one attempt per UTC day: pass the start of the current UTC
-    day. Counts every attempt regardless of status (active/completed/expired),
-    so a used-up day can't be retried."""
-    stmt = select(func.count(LeetcodeAssignment.id)).where(
-        LeetcodeAssignment.discord_user_id == discord_user_id,
-        LeetcodeAssignment.guild_id == guild_id,
-        LeetcodeAssignment.assigned_at >= since,
-    )
-    return int((await session.execute(stmt)).scalar_one())
-
-
 async def create_assignment(
     session: AsyncSession,
     *,
@@ -747,26 +728,6 @@ async def list_active_assignments(
     return (await session.execute(stmt)).scalars().all()
 
 
-async def delete_assignments_since(
-    session: AsyncSession,
-    discord_user_id: int,
-    guild_id: int,
-    since: datetime,
-) -> int:
-    """Delete a user's assignments created at/after ``since``; return the count.
-
-    Backs the admin ``/reset-leet-daily`` override: pass the start of the
-    current UTC day to wipe today's attempt(s) so the user can run /leet again.
-    """
-    stmt = delete(LeetcodeAssignment).where(
-        LeetcodeAssignment.discord_user_id == discord_user_id,
-        LeetcodeAssignment.guild_id == guild_id,
-        LeetcodeAssignment.assigned_at >= since,
-    )
-    result = await session.execute(stmt)
-    return result.rowcount or 0
-
-
 async def complete_assignment(
     session: AsyncSession, assignment_id: int, completed_at: datetime
 ) -> bool:
@@ -805,6 +766,7 @@ class LeetSolveResult(NamedTuple):
     change: LevelChange
     reward_xp: int
     new_streak: int
+    first_of_day: bool
 
 
 async def record_leet_solve(
@@ -813,31 +775,31 @@ async def record_leet_solve(
     user_id: int,
     today: date,
 ) -> LeetSolveResult:
-    """Apply a confirmed solve: streak, total, and streak-scaled XP, atomically.
+    """Apply a confirmed solve: streak, total, and XP, atomically.
 
-    Locks the user row, recomputes the streak from ``leetcode_last_solve_date``
-    relative to ``today`` (UTC), derives the reward from the new streak, adds it
-    to the cumulative XP that feeds the rank card, bumps the solved total, and
-    recomputes the level. The XP flows through the same ``xp``/level pipeline as
-    messages and voice; the flat reward itself is not multiplier-scaled.
+    Locks the user row and derives the payout via
+    :func:`core.leetcode.compute_solve_payout`: the first solve of the UTC day
+    pays the streak-scaled reward and advances the streak; every additional solve
+    that day pays a small flat amount and leaves the streak unchanged (one daily
+    "multiplier"). Either way the solved total is bumped, the XP is added to the
+    cumulative total that feeds the rank card, and the level is recomputed. The
+    XP flows through the same ``xp``/level pipeline as messages and voice.
     """
     user = await _lock_user(session, guild_id, user_id)
     old_level = user.level
-    new_streak = compute_streak_after_solve(
-        user.leetcode_last_solve_date, today, user.leetcode_streak
+    payout = compute_solve_payout(
+        user.leetcode_last_solve_date, today, user.leetcode_streak, old_level
     )
-    # Level-scaled: reward is a fraction of the next level's cost, computed from
-    # the level the user is at right now (before this grant).
-    reward_xp = compute_reward_xp(new_streak, old_level)
-    user.xp = user.xp + reward_xp
+    user.xp = user.xp + payout.reward_xp
     user.leetcode_solved_total = user.leetcode_solved_total + 1
-    user.leetcode_streak = new_streak
+    user.leetcode_streak = payout.new_streak
     user.leetcode_last_solve_date = today
     user.level = level_from_total_xp(user.xp)
     return LeetSolveResult(
         change=LevelChange(user=user, old_level=old_level, new_level=user.level),
-        reward_xp=reward_xp,
-        new_streak=new_streak,
+        reward_xp=payout.reward_xp,
+        new_streak=payout.new_streak,
+        first_of_day=payout.first_of_day,
     )
 
 

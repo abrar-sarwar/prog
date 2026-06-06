@@ -10,17 +10,25 @@ from __future__ import annotations
 import random
 from datetime import date
 
-from core.constants import LEET_VERIFICATION_CODE_PREFIX
+from core.constants import LEET_EXTRA_SOLVE_XP, LEET_VERIFICATION_CODE_PREFIX
 from core.leveling import xp_for_level
 from core.leetcode import (
     code_present_in_bio,
     compute_reward_xp,
+    compute_solve_payout,
     compute_streak_after_solve,
     find_matching_submission,
     generate_verification_code,
     slug_already_solved,
 )
-from core.leetcode_problems import PROBLEM_POOL, get_problem, random_problem
+from core.leetcode_problems import (
+    LeetProblem,
+    ProblemPool,
+    get_problem,
+    parse_problem_list,
+    pool_size,
+    random_problem,
+)
 
 
 # --- verification code ------------------------------------------------------
@@ -147,34 +155,120 @@ def test_slug_already_solved():
     assert not slug_already_solved("merge-intervals", recent)
 
 
-# --- problem pool -----------------------------------------------------------
+# --- solve payout (one multiplier per day, flat XP after) -------------------
 
 
-def test_pool_is_nonempty_and_well_formed():
-    assert len(PROBLEM_POOL) >= 50
-    for p in PROBLEM_POOL:
-        assert p.slug and p.title
-        assert p.difficulty in {"Easy", "Medium", "Hard"}
-        assert p.url == f"https://leetcode.com/problems/{p.slug}/"
+def test_payout_first_solve_of_day_pays_full_reward():
+    # No prior solve today -> first of day: full streak-scaled reward, streak ++.
+    payout = compute_solve_payout(
+        last_solve_date=None, today=date(2026, 6, 6), current_streak=0, current_level=3
+    )
+    assert payout.first_of_day is True
+    assert payout.new_streak == 1
+    assert payout.reward_xp == compute_reward_xp(1, 3)
 
 
-def test_pool_slugs_unique():
-    slugs = [p.slug for p in PROBLEM_POOL]
-    assert len(slugs) == len(set(slugs))
+def test_payout_continues_streak_when_yesterday():
+    payout = compute_solve_payout(
+        last_solve_date=date(2026, 6, 5),
+        today=date(2026, 6, 6),
+        current_streak=4,
+        current_level=10,
+    )
+    assert payout.first_of_day is True
+    assert payout.new_streak == 5
+    assert payout.reward_xp == compute_reward_xp(5, 10)
 
 
-def test_random_problem_excludes():
-    only_two = {p.slug for p in PROBLEM_POOL[2:]}  # exclude all but first two
-    chosen = random_problem(random.Random(1), exclude_slugs=only_two)
-    assert chosen is not None and chosen.slug in {PROBLEM_POOL[0].slug, PROBLEM_POOL[1].slug}
+def test_payout_extra_solve_same_day_is_flat_and_keeps_streak():
+    payout = compute_solve_payout(
+        last_solve_date=date(2026, 6, 6),
+        today=date(2026, 6, 6),
+        current_streak=5,
+        current_level=10,
+    )
+    assert payout.first_of_day is False
+    assert payout.reward_xp == LEET_EXTRA_SOLVE_XP
+    assert payout.new_streak == 5  # unchanged: only the first solve advances it
 
 
-def test_random_problem_all_excluded_returns_none():
-    everything = {p.slug for p in PROBLEM_POOL}
-    assert random_problem(random.Random(1), exclude_slugs=everything) is None
+# --- problem pool: parsing --------------------------------------------------
 
 
-def test_get_problem_roundtrip():
-    p = PROBLEM_POOL[0]
-    assert get_problem(p.slug) is p
+_SAMPLE_API = {
+    "stat_status_pairs": [
+        {
+            "stat": {"question__title": "Two Sum", "question__title_slug": "two-sum"},
+            "paid_only": False,
+            "difficulty": {"level": 1},
+        },
+        {
+            "stat": {"question__title": "Premium Q", "question__title_slug": "premium-q"},
+            "paid_only": True,  # filtered out
+            "difficulty": {"level": 2},
+        },
+        {
+            "stat": {"question__title": "Hard One", "question__title_slug": "hard-one"},
+            "paid_only": False,
+            "difficulty": {"level": 3},
+        },
+        {  # missing slug -> skipped
+            "stat": {"question__title": "No Slug", "question__title_slug": ""},
+            "paid_only": False,
+            "difficulty": {"level": 2},
+        },
+    ]
+}
+
+
+def test_parse_problem_list_filters_premium_and_maps_difficulty():
+    problems = parse_problem_list(_SAMPLE_API)
+    by_slug = {p.slug: p for p in problems}
+    assert set(by_slug) == {"two-sum", "hard-one"}  # premium + slugless dropped
+    assert by_slug["two-sum"].difficulty == "Easy"
+    assert by_slug["hard-one"].difficulty == "Hard"
+
+
+def test_parse_problem_list_handles_garbage():
+    assert parse_problem_list({}) == []
+    assert parse_problem_list({"stat_status_pairs": "nope"}) == []
+
+
+# --- problem pool: ProblemPool selection ------------------------------------
+
+
+_THREE = [
+    LeetProblem("a", "A", "Easy"),
+    LeetProblem("b", "B", "Medium"),
+    LeetProblem("c", "C", "Hard"),
+]
+
+
+def test_pool_random_excludes():
+    pool = ProblemPool(_THREE)
+    chosen = pool.random(random.Random(1), exclude_slugs={"b", "c"})
+    assert chosen is not None and chosen.slug == "a"
+
+
+def test_pool_random_all_excluded_returns_none():
+    pool = ProblemPool(_THREE)
+    assert pool.random(random.Random(1), exclude_slugs={"a", "b", "c"}) is None
+
+
+def test_pool_replace_ignores_empty():
+    pool = ProblemPool(_THREE)
+    assert pool.replace([]) is False
+    assert len(pool) == 3  # unchanged
+    assert pool.replace([LeetProblem("z", "Z", "Easy")]) is True
+    assert len(pool) == 1 and pool.get("z") is not None
+
+
+# --- problem pool: module singleton loaded from the committed snapshot -------
+
+
+def test_module_pool_loaded_from_snapshot():
+    assert pool_size() >= 50
+    # A classic free problem is present, and lookups are well-formed.
+    p = random_problem(random.Random(0))
+    assert p is not None and p.url == f"https://leetcode.com/problems/{p.slug}/"
     assert get_problem("definitely-not-a-real-slug") is None

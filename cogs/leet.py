@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -41,6 +41,7 @@ from core.constants import (
     LEET_GRANT_SWEEP_SECONDS,
     LEET_POLL_MAX_SECONDS,
     LEET_POLL_MIN_SECONDS,
+    LEET_POOL_REFRESH_HOURS,
     LEET_RECENT_AC_LIMIT,
     LEET_REWARD_ROLE_DURATION_HOURS,
     LEET_SESSION_MINUTES,
@@ -52,10 +53,16 @@ from core.leetcode import (
 )
 from core.leetcode_client import (
     LeetCodeUnavailable,
+    fetch_all_problems_payload,
     fetch_profile,
     fetch_recent_accepted,
 )
-from core.leetcode_problems import random_problem
+from core.leetcode_problems import (
+    parse_problem_list,
+    pool_size,
+    random_problem,
+    replace_pool,
+)
 from core.leveling import LEVEL_CAP
 from cogs.checks import (
     ProgsuvianRequired,
@@ -66,11 +73,6 @@ from db import crud
 from db.engine import get_session_factory
 
 log = logging.getLogger(__name__)
-
-
-def _utc_day_start(now: datetime) -> datetime:
-    """Return midnight UTC for the day of ``now`` (for the one-per-day gate)."""
-    return datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -303,10 +305,12 @@ class Leet(commands.Cog):
         self._sessions: dict[int, asyncio.Task] = {}
         self._resumed = False
         self.grant_sweep.start()
+        self.pool_refresh.start()
 
     def cog_unload(self) -> None:
-        """Cancel the sweep and all running session tasks on unload."""
+        """Cancel the sweep, pool refresh, and all running session tasks."""
         self.grant_sweep.cancel()
+        self.pool_refresh.cancel()
         for task in self._sessions.values():
             task.cancel()
 
@@ -411,52 +415,6 @@ class Leet(commands.Cog):
     # ------------------------------------------------------------------
     # Admin overrides
     # ------------------------------------------------------------------
-
-    @app_commands.command(
-        name="reset-leet-daily",
-        description="Clear a member's LeetCode daily attempt so they can run /leet again today",
-    )
-    @app_commands.describe(user="Member whose daily attempt to clear")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def reset_leet_daily(
-        self, interaction: discord.Interaction, user: discord.Member
-    ) -> None:
-        """Wipe today's attempt(s) for a member (and any active session)."""
-        assert interaction.guild is not None
-        guild = interaction.guild
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        now = datetime.now(timezone.utc)
-        # Cancel + archive any in-flight session so nothing dangles.
-        async with get_session_factory()() as session:
-            active = await crud.get_active_assignment(session, user.id, guild.id)
-            await session.commit()
-        if active is not None:
-            task = self._sessions.pop(active.id, None)
-            if task is not None:
-                task.cancel()
-            if active.thread_id is not None:
-                await self._archive_thread(active.thread_id)
-
-        async with get_session_factory()() as session:
-            removed = await crud.delete_assignments_since(
-                session, user.id, guild.id, _utc_day_start(now)
-            )
-            await session.commit()
-
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="leet daily reset",
-                description=(
-                    f"cleared {removed} attempt(s) today for {user.mention}. "
-                    "they can run `/leet` again now."
-                ),
-                color=discord.Color.blurple(),
-            ),
-            ephemeral=True,
-        )
 
     @app_commands.command(
         name="approve-leet",
@@ -753,23 +711,15 @@ class Leet(commands.Cog):
             )
             return
 
-        # One attempt per UTC day + no double active session.
+        # No daily cap (members may run /leet as often as they like), but only
+        # one active session at a time: finish the current problem first.
         async with get_session_factory()() as session:
             active = await crud.get_active_assignment(session, member.id, guild.id)
-            attempts_today = await crud.count_assignments_since(
-                session, member.id, guild.id, _utc_day_start(now)
-            )
             await session.commit()
         if active is not None:
             where = f" <#{active.thread_id}>" if active.thread_id else ""
             await interaction.followup.send(
                 f"you've already got an active leet session{where}. finish that one first.",
-                ephemeral=True,
-            )
-            return
-        if attempts_today >= 1:
-            await interaction.followup.send(
-                "you've used your leet attempt for today. come back tomorrow.",
                 ephemeral=True,
             )
             return
@@ -1160,11 +1110,18 @@ class Leet(commands.Cog):
         if not isinstance(thread, discord.Thread):
             return
         change = result.change
-        lines = [
-            f"accepted, that's **+{result.reward_xp:,} xp**",
-            f"streak: **{result.new_streak}** day(s), total solved: "
-            f"**{change.user.leetcode_solved_total}**",
-        ]
+        if result.first_of_day:
+            lines = [
+                f"accepted, that's **+{result.reward_xp:,} xp**",
+                f"streak: **{result.new_streak}** day(s), total solved: "
+                f"**{change.user.leetcode_solved_total}**",
+            ]
+        else:
+            lines = [
+                f"accepted — extra solve today, **+{result.reward_xp:,} xp**",
+                f"streak still **{result.new_streak}** day(s), total solved: "
+                f"**{change.user.leetcode_solved_total}**",
+            ]
         if change.leveled_up:
             lines.append(f"you leveled up to **{change.new_level}**")
         lines.append(role_note)
@@ -1255,6 +1212,39 @@ class Leet(commands.Cog):
 
     @grant_sweep.before_loop
     async def _before_sweep(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ------------------------------------------------------------------
+    # Background task: refresh the all-free problem pool from LeetCode
+    # ------------------------------------------------------------------
+
+    @tasks.loop(hours=LEET_POOL_REFRESH_HOURS)
+    async def pool_refresh(self) -> None:
+        """Refresh the /leet problem pool from LeetCode's public list.
+
+        Runs once right after the gateway is ready (the snapshot loaded at import
+        covers /leet until then), then every ``LEET_POOL_REFRESH_HOURS``. A failed
+        or empty fetch keeps the current pool, so /leet never goes problem-less.
+        """
+        try:
+            payload = await fetch_all_problems_payload()
+        except LeetCodeUnavailable as exc:
+            log.warning(
+                "leet: problem pool refresh failed (%s); keeping %d problems",
+                exc,
+                pool_size(),
+            )
+            return
+        problems = parse_problem_list(payload)
+        if replace_pool(problems):
+            log.info("leet: problem pool refreshed — %d free problems", pool_size())
+        else:
+            log.warning(
+                "leet: problem list parsed empty; keeping %d problems", pool_size()
+            )
+
+    @pool_refresh.before_loop
+    async def _before_pool_refresh(self) -> None:
         await self.bot.wait_until_ready()
 
 

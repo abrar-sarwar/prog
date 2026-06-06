@@ -19,9 +19,10 @@ from __future__ import annotations
 import random
 import string
 from datetime import date, timedelta
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, NamedTuple
 
 from core.constants import (
+    LEET_EXTRA_SOLVE_XP,
     LEET_REWARD_BASE_FRACTION,
     LEET_REWARD_CAP_FRACTION,
     LEET_REWARD_STREAK_MILESTONE_DAYS,
@@ -114,6 +115,42 @@ def compute_streak_after_solve(
         return current_streak + 1
     # Gap of two or more days: the streak broke; today starts a new one.
     return 1
+
+
+class SolvePayout(NamedTuple):
+    """The XP + streak outcome of a confirmed solve, before it's persisted."""
+
+    reward_xp: int
+    new_streak: int
+    first_of_day: bool
+
+
+def compute_solve_payout(
+    last_solve_date: date | None,
+    today: date,
+    current_streak: int,
+    current_level: int,
+    *,
+    extra_xp: int = LEET_EXTRA_SOLVE_XP,
+) -> SolvePayout:
+    """Decide the payout for a solve on ``today`` (UTC), enforcing one-per-day reward.
+
+    Members may solve any number of problems per day. Only the *first* solve of a
+    UTC day pays the streak-scaled reward and advances the streak (the single
+    daily "multiplier"); every additional solve that day pays a flat ``extra_xp``
+    and leaves the streak unchanged. ``first_of_day`` is True when this solve is
+    the first of ``today`` (i.e. ``last_solve_date`` is not ``today``), letting
+    callers phrase the confirmation correctly.
+    """
+    first_of_day = last_solve_date != today
+    new_streak = compute_streak_after_solve(last_solve_date, today, current_streak)
+    if first_of_day:
+        reward_xp = compute_reward_xp(new_streak, current_level)
+    else:
+        reward_xp = max(0, extra_xp)
+    return SolvePayout(
+        reward_xp=reward_xp, new_streak=new_streak, first_of_day=first_of_day
+    )
 
 
 def find_matching_submission(

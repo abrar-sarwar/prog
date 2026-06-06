@@ -96,6 +96,14 @@ LEET_REWARD_CAP_FRACTION: float = 1.5
 LEET_REWARD_STREAK_MILESTONE_DAYS: int = 14
 """Streak length (consecutive UTC solve-days) at which the reward hits the cap."""
 
+LEET_EXTRA_SOLVE_XP: int = 25
+"""Flat XP for each EXTRA /leet solve on a day the user has already solved.
+
+Members may run /leet as many times as they like per day, but only the first
+solve of the UTC day pays the streak-scaled reward (one "multiplier" per day);
+each additional solve grants this small flat amount and still bumps the solved
+total. Keeps grinding rewarding without making XP farmable."""
+
 LEET_REWARD_ROLE_DURATION_HOURS: int = 24
 """How long the configured reward role stays on a user after a solve before a
 background task removes it. Re-earning refreshes (does not stack) the timer."""
@@ -113,6 +121,14 @@ per-session task)."""
 
 LEET_HTTP_TIMEOUT_SECONDS: float = 10.0
 """Per-request timeout for all LeetCode GraphQL calls."""
+
+LEET_ALL_PROBLEMS_URL: str = "https://leetcode.com/api/problems/all/"
+"""LeetCode's public problem-list endpoint. Used to build the /leet pool from
+every free (non-premium) problem; ``paid_only`` rows are filtered out."""
+
+LEET_POOL_REFRESH_HOURS: int = 24
+"""How often the /leet problem pool is refreshed from LeetCode. Between refreshes
+(and whenever the fetch fails) the committed snapshot keeps the pool populated."""
 
 LEET_RECENT_AC_LIMIT: int = 20
 """How many recent accepted submissions to pull when detecting a solve."""

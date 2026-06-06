@@ -1,20 +1,36 @@
-"""The curated problem pool for the /leet feature — the official LeetCode 75.
+"""The problem pool for the /leet feature — all free (non-premium) problems.
 
-This is the editable seed list. It mirrors LeetCode's official **LeetCode 75**
-study plan (https://leetcode.com/studyplan/leetcode-75/): 75 problems, all free
-(no Premium-locked entries), grouped by the plan's own categories for
-readability. Every slug + title + difficulty was pulled straight from LeetCode's
-study-plan API, not guessed.
+The pool is loaded at runtime from LeetCode's public problem list
+(``/api/problems/all/``, fetched by :mod:`core.leetcode_client`) and refreshed
+periodically by the cog. It is layered so /leet never goes dark:
 
-To curate the pool, edit :data:`PROBLEM_POOL` directly — add/remove rows. Keep
-slugs accurate (the slug is the ``leetcode.com/problems/<slug>/`` path segment);
-the cog links to and detects solves by slug.
+1. **Live list** — every free problem on LeetCode (~3k), refreshed on a timer.
+2. **Committed snapshot** — ``core/data/leetcode_free_problems.json``, generated
+   from the same endpoint and committed to the repo. Loaded at import so /leet
+   works immediately on boot and survives any network outage.
+3. **Inline seed** — a small hardcoded set of classic free problems, the
+   absolute last resort if the snapshot file is missing or unreadable.
+
+Parsing (:func:`parse_problem_list`) and selection (:class:`ProblemPool`) are
+pure and unit-tested; the network fetch lives in the client and the refresh
+wiring lives in the cog.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import random
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Mapping, Sequence
+
+log = logging.getLogger(__name__)
+
+_SNAPSHOT_PATH = Path(__file__).parent / "data" / "leetcode_free_problems.json"
+
+# LeetCode's ``/api/problems/all/`` encodes difficulty as a numeric level.
+_DIFFICULTY_BY_LEVEL: dict[int, str] = {1: "Easy", 2: "Medium", 3: "Hard"}
 
 
 @dataclass(frozen=True)
@@ -31,115 +47,119 @@ class LeetProblem:
         return f"https://leetcode.com/problems/{self.slug}/"
 
 
-# The official LeetCode 75 study plan, verified live against leetcode.com — all
-# free. Grouped by the plan's categories; selection is random so order has no
-# functional meaning.
-PROBLEM_POOL: list[LeetProblem] = [
-    # Array / String
-    LeetProblem("merge-strings-alternately", "Merge Strings Alternately", "Easy"),
-    LeetProblem("greatest-common-divisor-of-strings", "Greatest Common Divisor of Strings", "Easy"),
-    LeetProblem("kids-with-the-greatest-number-of-candies", "Kids With the Greatest Number of Candies", "Easy"),
-    LeetProblem("can-place-flowers", "Can Place Flowers", "Easy"),
-    LeetProblem("reverse-vowels-of-a-string", "Reverse Vowels of a String", "Easy"),
-    LeetProblem("reverse-words-in-a-string", "Reverse Words in a String", "Medium"),
+# Absolute last-resort seed: a handful of well-known free problems. Only used if
+# the committed snapshot can't be read. The snapshot is the real fallback.
+_SEED: list[LeetProblem] = [
+    LeetProblem("two-sum", "Two Sum", "Easy"),
+    LeetProblem("valid-parentheses", "Valid Parentheses", "Easy"),
+    LeetProblem("merge-two-sorted-lists", "Merge Two Sorted Lists", "Easy"),
+    LeetProblem("best-time-to-buy-and-sell-stock", "Best Time to Buy and Sell Stock", "Easy"),
+    LeetProblem("valid-palindrome", "Valid Palindrome", "Easy"),
+    LeetProblem("invert-binary-tree", "Invert Binary Tree", "Easy"),
+    LeetProblem("longest-substring-without-repeating-characters", "Longest Substring Without Repeating Characters", "Medium"),
+    LeetProblem("3sum", "3Sum", "Medium"),
     LeetProblem("product-of-array-except-self", "Product of Array Except Self", "Medium"),
-    LeetProblem("increasing-triplet-subsequence", "Increasing Triplet Subsequence", "Medium"),
-    LeetProblem("string-compression", "String Compression", "Medium"),
-    # Two Pointers
-    LeetProblem("move-zeroes", "Move Zeroes", "Easy"),
-    LeetProblem("is-subsequence", "Is Subsequence", "Easy"),
-    LeetProblem("container-with-most-water", "Container With Most Water", "Medium"),
-    LeetProblem("max-number-of-k-sum-pairs", "Max Number of K-Sum Pairs", "Medium"),
-    # Sliding Window
-    LeetProblem("maximum-average-subarray-i", "Maximum Average Subarray I", "Easy"),
-    LeetProblem("maximum-number-of-vowels-in-a-substring-of-given-length", "Maximum Number of Vowels in a Substring of Given Length", "Medium"),
-    LeetProblem("max-consecutive-ones-iii", "Max Consecutive Ones III", "Medium"),
-    LeetProblem("longest-subarray-of-1s-after-deleting-one-element", "Longest Subarray of 1's After Deleting One Element", "Medium"),
-    # Prefix Sum
-    LeetProblem("find-the-highest-altitude", "Find the Highest Altitude", "Easy"),
-    LeetProblem("find-pivot-index", "Find Pivot Index", "Easy"),
-    # Hash Map / Set
-    LeetProblem("find-the-difference-of-two-arrays", "Find the Difference of Two Arrays", "Easy"),
-    LeetProblem("unique-number-of-occurrences", "Unique Number of Occurrences", "Easy"),
-    LeetProblem("determine-if-two-strings-are-close", "Determine if Two Strings Are Close", "Medium"),
-    LeetProblem("equal-row-and-column-pairs", "Equal Row and Column Pairs", "Medium"),
-    # Stack
-    LeetProblem("removing-stars-from-a-string", "Removing Stars From a String", "Medium"),
-    LeetProblem("asteroid-collision", "Asteroid Collision", "Medium"),
-    LeetProblem("decode-string", "Decode String", "Medium"),
-    # Queue
-    LeetProblem("number-of-recent-calls", "Number of Recent Calls", "Easy"),
-    LeetProblem("dota2-senate", "Dota2 Senate", "Medium"),
-    # Linked List
-    LeetProblem("delete-the-middle-node-of-a-linked-list", "Delete the Middle Node of a Linked List", "Medium"),
-    LeetProblem("odd-even-linked-list", "Odd Even Linked List", "Medium"),
-    LeetProblem("reverse-linked-list", "Reverse Linked List", "Easy"),
-    LeetProblem("maximum-twin-sum-of-a-linked-list", "Maximum Twin Sum of a Linked List", "Medium"),
-    # Binary Tree - DFS
-    LeetProblem("maximum-depth-of-binary-tree", "Maximum Depth of Binary Tree", "Easy"),
-    LeetProblem("leaf-similar-trees", "Leaf-Similar Trees", "Easy"),
-    LeetProblem("count-good-nodes-in-binary-tree", "Count Good Nodes in Binary Tree", "Medium"),
-    LeetProblem("path-sum-iii", "Path Sum III", "Medium"),
-    LeetProblem("longest-zigzag-path-in-a-binary-tree", "Longest ZigZag Path in a Binary Tree", "Medium"),
-    LeetProblem("lowest-common-ancestor-of-a-binary-tree", "Lowest Common Ancestor of a Binary Tree", "Medium"),
-    # Binary Tree - BFS
-    LeetProblem("binary-tree-right-side-view", "Binary Tree Right Side View", "Medium"),
-    LeetProblem("maximum-level-sum-of-a-binary-tree", "Maximum Level Sum of a Binary Tree", "Medium"),
-    # Binary Search Tree
-    LeetProblem("search-in-a-binary-search-tree", "Search in a Binary Search Tree", "Easy"),
-    LeetProblem("delete-node-in-a-bst", "Delete Node in a BST", "Medium"),
-    # Graphs - DFS
-    LeetProblem("keys-and-rooms", "Keys and Rooms", "Medium"),
-    LeetProblem("number-of-provinces", "Number of Provinces", "Medium"),
-    LeetProblem("reorder-routes-to-make-all-paths-lead-to-the-city-zero", "Reorder Routes to Make All Paths Lead to the City Zero", "Medium"),
-    LeetProblem("evaluate-division", "Evaluate Division", "Medium"),
-    # Graphs - BFS
-    LeetProblem("nearest-exit-from-entrance-in-maze", "Nearest Exit from Entrance in Maze", "Medium"),
-    LeetProblem("rotting-oranges", "Rotting Oranges", "Medium"),
-    # Heap / Priority Queue
-    LeetProblem("kth-largest-element-in-an-array", "Kth Largest Element in an Array", "Medium"),
-    LeetProblem("smallest-number-in-infinite-set", "Smallest Number in Infinite Set", "Medium"),
-    LeetProblem("maximum-subsequence-score", "Maximum Subsequence Score", "Medium"),
-    LeetProblem("total-cost-to-hire-k-workers", "Total Cost to Hire K Workers", "Medium"),
-    # Binary Search
-    LeetProblem("guess-number-higher-or-lower", "Guess Number Higher or Lower", "Easy"),
-    LeetProblem("successful-pairs-of-spells-and-potions", "Successful Pairs of Spells and Potions", "Medium"),
-    LeetProblem("find-peak-element", "Find Peak Element", "Medium"),
-    LeetProblem("koko-eating-bananas", "Koko Eating Bananas", "Medium"),
-    # Backtracking
-    LeetProblem("letter-combinations-of-a-phone-number", "Letter Combinations of a Phone Number", "Medium"),
-    LeetProblem("combination-sum-iii", "Combination Sum III", "Medium"),
-    # DP - 1D
-    LeetProblem("n-th-tribonacci-number", "N-th Tribonacci Number", "Easy"),
-    LeetProblem("min-cost-climbing-stairs", "Min Cost Climbing Stairs", "Easy"),
-    LeetProblem("house-robber", "House Robber", "Medium"),
-    LeetProblem("domino-and-tromino-tiling", "Domino and Tromino Tiling", "Medium"),
-    # DP - Multidimensional
-    LeetProblem("unique-paths", "Unique Paths", "Medium"),
-    LeetProblem("longest-common-subsequence", "Longest Common Subsequence", "Medium"),
-    LeetProblem("best-time-to-buy-and-sell-stock-with-transaction-fee", "Best Time to Buy and Sell Stock with Transaction Fee", "Medium"),
-    LeetProblem("edit-distance", "Edit Distance", "Medium"),
-    # Bit Manipulation
-    LeetProblem("counting-bits", "Counting Bits", "Easy"),
-    LeetProblem("single-number", "Single Number", "Easy"),
-    LeetProblem("minimum-flips-to-make-a-or-b-equal-to-c", "Minimum Flips to Make a OR b Equal to c", "Medium"),
-    # Trie
-    LeetProblem("implement-trie-prefix-tree", "Implement Trie (Prefix Tree)", "Medium"),
-    LeetProblem("search-suggestions-system", "Search Suggestions System", "Medium"),
-    # Intervals
-    LeetProblem("non-overlapping-intervals", "Non-overlapping Intervals", "Medium"),
-    LeetProblem("minimum-number-of-arrows-to-burst-balloons", "Minimum Number of Arrows to Burst Balloons", "Medium"),
-    # Monotonic Stack
-    LeetProblem("daily-temperatures", "Daily Temperatures", "Medium"),
-    LeetProblem("online-stock-span", "Online Stock Span", "Medium"),
+    LeetProblem("group-anagrams", "Group Anagrams", "Medium"),
+    LeetProblem("number-of-islands", "Number of Islands", "Medium"),
+    LeetProblem("coin-change", "Coin Change", "Medium"),
 ]
 
-_BY_SLUG: dict[str, LeetProblem] = {p.slug: p for p in PROBLEM_POOL}
+
+def parse_problem_list(payload: Mapping[str, object]) -> list[LeetProblem]:
+    """Turn an ``/api/problems/all/`` payload into the free-problem list.
+
+    Keeps only rows with ``paid_only`` falsey and a usable slug+title; maps the
+    numeric difficulty level to Easy/Medium/Hard (unknown levels -> "Unknown").
+    Returns an empty list for a malformed payload so callers can fall back.
+    """
+    pairs = payload.get("stat_status_pairs") if isinstance(payload, Mapping) else None
+    if not isinstance(pairs, Sequence):
+        return []
+    out: list[LeetProblem] = []
+    for item in pairs:
+        if not isinstance(item, Mapping) or item.get("paid_only"):
+            continue
+        stat = item.get("stat")
+        stat = stat if isinstance(stat, Mapping) else {}
+        slug = stat.get("question__title_slug")
+        title = stat.get("question__title")
+        if not isinstance(slug, str) or not isinstance(title, str) or not slug:
+            continue
+        diff = item.get("difficulty")
+        level = diff.get("level") if isinstance(diff, Mapping) else None
+        out.append(
+            LeetProblem(slug, title, _DIFFICULTY_BY_LEVEL.get(level, "Unknown"))
+        )
+    return out
 
 
-def get_problem(slug: str) -> LeetProblem | None:
-    """Return the pool problem with ``slug``, or None if it's not in the pool."""
-    return _BY_SLUG.get(slug)
+class ProblemPool:
+    """A mutable, hot-swappable set of problems with random selection.
+
+    Held as a module singleton (:data:`_pool`); the cog calls :meth:`replace`
+    on each successful refresh. :meth:`replace` ignores an empty list so a bad
+    refresh can never empty the pool.
+    """
+
+    def __init__(self, problems: Iterable[LeetProblem]) -> None:
+        self._problems: list[LeetProblem] = list(problems)
+        self._by_slug: dict[str, LeetProblem] = {p.slug: p for p in self._problems}
+
+    def __len__(self) -> int:
+        return len(self._problems)
+
+    def replace(self, problems: Iterable[LeetProblem]) -> bool:
+        """Swap in a new problem list. No-op (returns False) if it's empty."""
+        new = list(problems)
+        if not new:
+            return False
+        self._problems = new
+        self._by_slug = {p.slug: p for p in new}
+        return True
+
+    def get(self, slug: str) -> LeetProblem | None:
+        """Return the problem with ``slug``, or None if not in the pool."""
+        return self._by_slug.get(slug)
+
+    def random(
+        self,
+        rng: random.Random | None = None,
+        *,
+        exclude_slugs: frozenset[str] | set[str] | None = None,
+    ) -> LeetProblem | None:
+        """Return a random problem, optionally excluding some slugs.
+
+        Returns None only if every problem is excluded (or the pool is empty).
+        """
+        picker = rng or random
+        pool = self._problems
+        if exclude_slugs:
+            pool = [p for p in pool if p.slug not in exclude_slugs]
+        if not pool:
+            return None
+        return picker.choice(pool)
+
+
+def _load_snapshot() -> list[LeetProblem]:
+    """Read the committed snapshot, or fall back to the inline seed."""
+    try:
+        raw = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        problems = [
+            LeetProblem(r["slug"], r["title"], r.get("difficulty", "Unknown"))
+            for r in raw
+            if isinstance(r, Mapping) and r.get("slug") and r.get("title")
+        ]
+        if problems:
+            return problems
+        log.warning("leet pool: snapshot was empty; using inline seed")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("leet pool: snapshot load failed (%s); using inline seed", exc)
+    return list(_SEED)
+
+
+# Module singleton. Loaded from the snapshot at import so /leet works at once;
+# the cog refreshes it from the network shortly after startup and on a timer.
+_pool = ProblemPool(_load_snapshot())
 
 
 def random_problem(
@@ -147,15 +167,20 @@ def random_problem(
     *,
     exclude_slugs: frozenset[str] | set[str] | None = None,
 ) -> LeetProblem | None:
-    """Return a random problem from the pool, optionally excluding some slugs.
+    """Return a random problem from the live pool (see :meth:`ProblemPool.random`)."""
+    return _pool.random(rng, exclude_slugs=exclude_slugs)
 
-    ``exclude_slugs`` lets the cog skip problems the user has already solved.
-    Returns None only if every pooled problem is excluded.
-    """
-    picker = rng or random
-    pool = PROBLEM_POOL
-    if exclude_slugs:
-        pool = [p for p in pool if p.slug not in exclude_slugs]
-    if not pool:
-        return None
-    return picker.choice(pool)
+
+def get_problem(slug: str) -> LeetProblem | None:
+    """Return the pooled problem with ``slug``, or None."""
+    return _pool.get(slug)
+
+
+def pool_size() -> int:
+    """Current number of problems in the live pool."""
+    return len(_pool)
+
+
+def replace_pool(problems: Iterable[LeetProblem]) -> bool:
+    """Swap the live pool's contents (no-op on empty). Returns True if replaced."""
+    return _pool.replace(problems)
