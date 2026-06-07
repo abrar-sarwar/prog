@@ -820,7 +820,6 @@ class LeetSolveResult(NamedTuple):
     new_streak: int
     kind: str
     capped: bool
-    first_of_day: bool  # legacy; removed in the /daily-vs-/leet cleanup
 
 
 async def record_leet_solve(
@@ -866,7 +865,6 @@ async def record_leet_solve(
         new_streak=payout.new_streak,
         kind=payout.kind,
         capped=payout.capped,
-        first_of_day=payout.first_of_day,
     )
 
 

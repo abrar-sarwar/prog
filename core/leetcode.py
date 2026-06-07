@@ -22,7 +22,6 @@ from datetime import date, timedelta
 from typing import Iterable, Mapping, NamedTuple
 
 from core.constants import (
-    LEET_EXTRA_SOLVE_XP,
     LEET_PRACTICE_DAILY_CAP,
     LEET_PRACTICE_FRACTION,
     LEET_PRACTICE_OVERFLOW_XP,
@@ -125,37 +124,9 @@ class SolvePayout(NamedTuple):
 
     reward_xp: int
     new_streak: int
-    first_of_day: bool = True  # legacy; removed in the /daily-vs-/leet cleanup
-    kind: str = "practice"     # "daily" | "practice"
-    capped: bool = False       # practice solve over the daily cap (token payout)
+    kind: str       # "daily" | "practice"
+    capped: bool    # practice solve over the daily cap (token payout)
 
-
-def compute_solve_payout(
-    last_solve_date: date | None,
-    today: date,
-    current_streak: int,
-    current_level: int,
-    *,
-    extra_xp: int = LEET_EXTRA_SOLVE_XP,
-) -> SolvePayout:
-    """Decide the payout for a solve on ``today`` (UTC), enforcing one-per-day reward.
-
-    Members may solve any number of problems per day. Only the *first* solve of a
-    UTC day pays the streak-scaled reward and advances the streak (the single
-    daily "multiplier"); every additional solve that day pays a flat ``extra_xp``
-    and leaves the streak unchanged. ``first_of_day`` is True when this solve is
-    the first of ``today`` (i.e. ``last_solve_date`` is not ``today``), letting
-    callers phrase the confirmation correctly.
-    """
-    first_of_day = last_solve_date != today
-    new_streak = compute_streak_after_solve(last_solve_date, today, current_streak)
-    if first_of_day:
-        reward_xp = compute_reward_xp(new_streak, current_level)
-    else:
-        reward_xp = max(0, extra_xp)
-    return SolvePayout(
-        reward_xp=reward_xp, new_streak=new_streak, first_of_day=first_of_day
-    )
 
 
 def compute_daily_payout(
@@ -175,7 +146,6 @@ def compute_daily_payout(
     return SolvePayout(
         reward_xp=reward_xp,
         new_streak=new_streak,
-        first_of_day=(last_solve_date != today),
         kind="daily",
         capped=False,
     )
@@ -211,7 +181,6 @@ def compute_practice_payout(
     return SolvePayout(
         reward_xp=reward_xp,
         new_streak=new_streak,
-        first_of_day=(last_solve_date != today),
         kind="practice",
         capped=capped,
     )

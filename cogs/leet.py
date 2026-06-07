@@ -496,7 +496,7 @@ class Leet(commands.Cog):
         task = self._sessions.pop(active.id, None)
         if task is not None:
             task.cancel()
-        await self._award_solve(user, active.id, active.thread_id or 0)
+        await self._award_solve(user, active.id, active.thread_id or 0, active.kind)
 
         await interaction.followup.send(
             f"approved {user.mention}'s solve for **{active.problem_title}**.",
@@ -952,6 +952,8 @@ class Leet(commands.Cog):
                 assigned_at=now,
                 expires_at=expires_at,
                 thread_id=thread.id,
+                kind="practice",
+                daily_date=None,
             )
             assignment_id = assignment.id
             await session.commit()
@@ -960,10 +962,9 @@ class Leet(commands.Cog):
         await interaction.followup.send(
             f"your problem's in {thread.mention}. good luck.", ephemeral=True
         )
-
         self._start_session(
             member, assignment_id, thread.id, problem.slug,
-            link.leetcode_username, now, expires_at,
+            link.leetcode_username, now, expires_at, "practice",
         )
 
     async def _post_problem(
@@ -1166,12 +1167,13 @@ class Leet(commands.Cog):
         username: str,
         assigned_at: datetime,
         expires_at: datetime,
+        kind: str,
     ) -> None:
         """Spawn (and track) the detection task for one assignment."""
         task = asyncio.create_task(
             self._run_session(
                 member, assignment_id, thread_id, slug, username,
-                assigned_at, expires_at,
+                assigned_at, expires_at, kind,
             )
         )
         self._sessions[assignment_id] = task
@@ -1185,6 +1187,7 @@ class Leet(commands.Cog):
         username: str,
         assigned_at: datetime,
         expires_at: datetime,
+        kind: str,
     ) -> None:
         """Poll for the accepted submission until solve or the (extendable) expiry.
 
@@ -1215,8 +1218,18 @@ class Leet(commands.Cog):
                     recent = await fetch_recent_accepted(
                         username, LEET_RECENT_AC_LIMIT
                     )
-                    if find_matching_submission(slug, assigned_epoch, recent):
-                        await self._award_solve(member, assignment_id, thread_id)
+                    if kind == "daily":
+                        day = now.date()
+                        today_start = int(
+                            datetime(
+                                day.year, day.month, day.day, tzinfo=timezone.utc
+                            ).timestamp()
+                        )
+                        hit = find_daily_solve_today(slug, today_start, recent)
+                    else:
+                        hit = find_matching_submission(slug, assigned_epoch, recent)
+                    if hit:
+                        await self._award_solve(member, assignment_id, thread_id, kind)
                         return
                 except LeetCodeUnavailable as exc:
                     log.warning(
@@ -1294,11 +1307,11 @@ class Leet(commands.Cog):
     # ------------------------------------------------------------------
 
     async def _award_solve(
-        self, member: discord.Member, assignment_id: int, thread_id: int
+        self, member: discord.Member, assignment_id: int, thread_id: int, kind: str
     ) -> None:
         """Pay out a confirmed solve: XP, role, hype, confirmation, archive.
 
-        ``complete_assignment`` is the idempotency guard — if the row is no
+        ``complete_assignment`` is the idempotency guard -- if the row is no
         longer active (already paid or expired) we bail without paying again.
         """
         guild = member.guild
@@ -1310,7 +1323,22 @@ class Leet(commands.Cog):
             if not await crud.complete_assignment(session, assignment_id, now):
                 await session.commit()
                 return
-            result = await crud.record_leet_solve(session, guild.id, member.id, today)
+            practice_solves_today = 0
+            if kind == "practice":
+                # this solve is already counted (just completed); subtract it to
+                # get the number solved before it, which drives the cap.
+                counted = await crud.count_practice_solves_today(
+                    session, member.id, guild.id, today
+                )
+                practice_solves_today = max(0, counted - 1)
+            result = await crud.record_leet_solve(
+                session,
+                guild.id,
+                member.id,
+                today,
+                kind=kind,
+                practice_solves_today=practice_solves_today,
+            )
             change = result.change
             aura_already_fired = change.user.aura_message_fired
             if (
@@ -1417,16 +1445,22 @@ class Leet(commands.Cog):
         if not isinstance(thread, discord.Thread):
             return
         change = result.change
-        if result.first_of_day:
+        if result.kind == "daily":
             lines = [
-                f"accepted, that's **+{result.reward_xp:,} xp**",
+                f"daily done, that's **+{result.reward_xp:,} xp**",
+                f"streak: **{result.new_streak}** day(s), total solved: "
+                f"**{change.user.leetcode_solved_total}**",
+            ]
+        elif result.capped:
+            lines = [
+                f"accepted - past today's practice bonus, **+{result.reward_xp:,} xp**",
                 f"streak: **{result.new_streak}** day(s), total solved: "
                 f"**{change.user.leetcode_solved_total}**",
             ]
         else:
             lines = [
-                f"accepted — extra solve today, **+{result.reward_xp:,} xp**",
-                f"streak still **{result.new_streak}** day(s), total solved: "
+                f"accepted, practice solve **+{result.reward_xp:,} xp**",
+                f"streak: **{result.new_streak}** day(s), total solved: "
                 f"**{change.user.leetcode_solved_total}**",
             ]
         if change.leveled_up:
@@ -1477,7 +1511,7 @@ class Leet(commands.Cog):
                 continue
             self._start_session(
                 member, a.id, a.thread_id, a.problem_slug,
-                link_username, a.assigned_at, a.expires_at,
+                link_username, a.assigned_at, a.expires_at, a.kind,
             )
             log.info("leet: resumed active session %s after restart", a.id)
 

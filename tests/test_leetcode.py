@@ -10,12 +10,11 @@ from __future__ import annotations
 import random
 from datetime import date
 
-from core.constants import LEET_EXTRA_SOLVE_XP, LEET_VERIFICATION_CODE_PREFIX
+from core.constants import LEET_VERIFICATION_CODE_PREFIX
 from core.leveling import xp_for_level
 from core.leetcode import (
     code_present_in_bio,
     compute_reward_xp,
-    compute_solve_payout,
     compute_streak_after_solve,
     find_matching_submission,
     generate_verification_code,
@@ -153,43 +152,6 @@ def test_slug_already_solved():
     recent = [_sub("two-sum", "400"), _sub("3sum", "500")]
     assert slug_already_solved("two-sum", recent)
     assert not slug_already_solved("merge-intervals", recent)
-
-
-# --- solve payout (one multiplier per day, flat XP after) -------------------
-
-
-def test_payout_first_solve_of_day_pays_full_reward():
-    # No prior solve today -> first of day: full streak-scaled reward, streak ++.
-    payout = compute_solve_payout(
-        last_solve_date=None, today=date(2026, 6, 6), current_streak=0, current_level=3
-    )
-    assert payout.first_of_day is True
-    assert payout.new_streak == 1
-    assert payout.reward_xp == compute_reward_xp(1, 3)
-
-
-def test_payout_continues_streak_when_yesterday():
-    payout = compute_solve_payout(
-        last_solve_date=date(2026, 6, 5),
-        today=date(2026, 6, 6),
-        current_streak=4,
-        current_level=10,
-    )
-    assert payout.first_of_day is True
-    assert payout.new_streak == 5
-    assert payout.reward_xp == compute_reward_xp(5, 10)
-
-
-def test_payout_extra_solve_same_day_is_flat_and_keeps_streak():
-    payout = compute_solve_payout(
-        last_solve_date=date(2026, 6, 6),
-        today=date(2026, 6, 6),
-        current_streak=5,
-        current_level=10,
-    )
-    assert payout.first_of_day is False
-    assert payout.reward_xp == LEET_EXTRA_SOLVE_XP
-    assert payout.new_streak == 5  # unchanged: only the first solve advances it
 
 
 # --- problem pool: parsing --------------------------------------------------

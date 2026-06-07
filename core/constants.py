@@ -99,14 +99,6 @@ LEET_REWARD_CAP_FRACTION: float = 1.5
 LEET_REWARD_STREAK_MILESTONE_DAYS: int = 14
 """Streak length (consecutive UTC solve-days) at which the reward hits the cap."""
 
-LEET_EXTRA_SOLVE_XP: int = 25
-"""Flat XP for each EXTRA /leet solve on a day the user has already solved.
-
-Members may run /leet as many times as they like per day, but only the first
-solve of the UTC day pays the streak-scaled reward (one "multiplier" per day);
-each additional solve grants this small flat amount and still bumps the solved
-total. Keeps grinding rewarding without making XP farmable."""
-
 # --- /leet practice payout (reduced, capped rate) -------------------------
 
 LEET_PRACTICE_FRACTION: float = 0.25
