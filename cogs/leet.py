@@ -37,16 +37,19 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from cogs.onboarding import ensure_member_initialized
+from core import leetcode_tags
 from core.constants import (
     LEET_EXTEND_MINUTES,
     LEET_EXTEND_PROMPT_BEFORE_SECONDS,
     LEET_GRANT_SWEEP_SECONDS,
+    LEET_MAX_TAGS,
     LEET_POLL_MAX_SECONDS,
     LEET_POLL_MIN_SECONDS,
     LEET_POOL_REFRESH_HOURS,
     LEET_RECENT_AC_LIMIT,
     LEET_REWARD_ROLE_DURATION_HOURS,
     LEET_SESSION_MINUTES,
+    LEET_TAG_QUERY_PAGE,
 )
 from core.leetcode import (
     code_present_in_bio,
@@ -57,10 +60,13 @@ from core.leetcode_client import (
     LeetCodeUnavailable,
     fetch_all_problems_payload,
     fetch_profile,
+    fetch_questions_by_tags,
     fetch_recent_accepted,
 )
 from core.leetcode_problems import (
     parse_problem_list,
+    parse_question_list,
+    parse_question_total,
     pool_size,
     random_problem,
     replace_pool,
@@ -75,6 +81,16 @@ from db import crud
 from db.engine import get_session_factory
 
 log = logging.getLogger(__name__)
+
+
+async def _tag_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete /leet tag args against the real LeetCode topic list."""
+    return [
+        app_commands.Choice(name=name, value=slug)
+        for name, slug in leetcode_tags.match_tags(current, 25)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -782,17 +798,65 @@ class Leet(commands.Cog):
             return None
         return thread
 
+    async def _pick_tagged_problem(
+        self, tag_slugs: list[str], exclude_slugs: set
+    ):
+        """Pick a random free problem carrying all ``tag_slugs``.
+
+        Queries LeetCode for the filtered total, then a random page, and picks a
+        free problem not in ``exclude_slugs``. Returns a LeetProblem, or None if
+        nothing matches / LeetCode is unavailable.
+        """
+        try:
+            head = await fetch_questions_by_tags(tag_slugs, limit=1, skip=0)
+        except LeetCodeUnavailable as exc:
+            log.warning("leet: tag query (head) failed for %s: %s", tag_slugs, exc)
+            return None
+        total = parse_question_total(head)
+        if total <= 0:
+            return None
+        skip = random.randint(0, max(0, total - 1))
+        start = min(skip, max(0, total - LEET_TAG_QUERY_PAGE))
+        try:
+            page = await fetch_questions_by_tags(
+                tag_slugs, limit=LEET_TAG_QUERY_PAGE, skip=start
+            )
+        except LeetCodeUnavailable as exc:
+            log.warning("leet: tag query (page) failed for %s: %s", tag_slugs, exc)
+            return None
+        problems = parse_question_list(page)
+        candidates = [p for p in problems if p.slug not in exclude_slugs]
+        if not candidates:
+            candidates = problems  # everything recently solved; allow a repeat
+        if not candidates:
+            return None
+        return random.choice(candidates)
+
     # ------------------------------------------------------------------
     # /leet
     # ------------------------------------------------------------------
 
     @app_commands.command(
         name="leet",
-        description="Get a random LeetCode problem to solve on leetcode.com",
+        description="Practice: a random LeetCode problem, optionally scoped to topics",
+    )
+    @app_commands.describe(
+        tag1="Optional topic to scope the problem",
+        tag2="Optional second topic",
+        tag3="Optional third topic",
+    )
+    @app_commands.autocomplete(
+        tag1=_tag_autocomplete, tag2=_tag_autocomplete, tag3=_tag_autocomplete
     )
     @app_commands.guild_only()
     @requires_progsuvian()
-    async def leet(self, interaction: discord.Interaction) -> None:
+    async def leet(
+        self,
+        interaction: discord.Interaction,
+        tag1: str | None = None,
+        tag2: str | None = None,
+        tag3: str | None = None,
+    ) -> None:
         """Start a /leet session: gate, pick a problem, open a private thread."""
         assert interaction.guild is not None
         guild = interaction.guild
@@ -831,7 +895,34 @@ class Leet(commands.Cog):
             )
             return
         solved_slugs = {r.get("titleSlug") for r in recent if r.get("titleSlug")}
-        problem = random_problem(exclude_slugs=solved_slugs) or random_problem()
+
+        # Resolve requested tags (slug from autocomplete, or typed name/slug).
+        requested = [t for t in (tag1, tag2, tag3) if t]
+        tag_slugs: list[str] = []
+        for raw in requested:
+            slug = leetcode_tags.normalize_tag(raw)
+            if slug is None:
+                await interaction.followup.send(
+                    f"`{raw}` isn't a known leetcode topic. start typing to pick "
+                    "one from the list.",
+                    ephemeral=True,
+                )
+                return
+            if slug not in tag_slugs:
+                tag_slugs.append(slug)
+        tag_slugs = tag_slugs[:LEET_MAX_TAGS]
+
+        if tag_slugs:
+            problem = await self._pick_tagged_problem(tag_slugs, solved_slugs)
+            if problem is None:
+                pretty = ", ".join(f"`{s}`" for s in tag_slugs)
+                await interaction.followup.send(
+                    f"no free problems match {pretty} together. try dropping a tag.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            problem = random_problem(exclude_slugs=solved_slugs) or random_problem()
         if problem is None:
             await interaction.followup.send(
                 "the problem pool is empty, tell an admin.", ephemeral=True
