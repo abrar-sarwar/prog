@@ -272,3 +272,81 @@ def test_module_pool_loaded_from_snapshot():
     p = random_problem(random.Random(0))
     assert p is not None and p.url == f"https://leetcode.com/problems/{p.slug}/"
     assert get_problem("definitely-not-a-real-slug") is None
+
+
+def test_daily_payout_pays_streak_multiplier_and_advances_streak():
+    from core.leetcode import compute_daily_payout
+
+    payout = compute_daily_payout(
+        last_solve_date=date(2026, 6, 5),
+        today=date(2026, 6, 6),
+        current_streak=3,
+        current_level=5,
+    )
+    assert payout.kind == "daily"
+    assert payout.capped is False
+    assert payout.new_streak == 4
+    # multiplier reward equals the streak-scaled compute_reward_xp
+    from core.leetcode import compute_reward_xp
+    assert payout.reward_xp == compute_reward_xp(4, 5)
+
+
+def test_practice_payout_under_cap_is_fraction_of_next_level():
+    from core.leetcode import compute_practice_payout
+    from core.constants import LEET_PRACTICE_FRACTION
+
+    payout = compute_practice_payout(
+        last_solve_date=date(2026, 6, 6),
+        today=date(2026, 6, 6),
+        current_streak=2,
+        current_level=10,
+        practice_solves_today=0,
+    )
+    assert payout.kind == "practice"
+    assert payout.capped is False
+    assert payout.reward_xp == max(1, round(LEET_PRACTICE_FRACTION * xp_for_level(11)))
+
+
+def test_practice_payout_over_cap_pays_flat_overflow():
+    from core.leetcode import compute_practice_payout
+    from core.constants import LEET_PRACTICE_DAILY_CAP, LEET_PRACTICE_OVERFLOW_XP
+
+    payout = compute_practice_payout(
+        last_solve_date=date(2026, 6, 6),
+        today=date(2026, 6, 6),
+        current_streak=2,
+        current_level=10,
+        practice_solves_today=LEET_PRACTICE_DAILY_CAP,
+    )
+    assert payout.capped is True
+    assert payout.reward_xp == LEET_PRACTICE_OVERFLOW_XP
+
+
+def test_practice_payout_keeps_streak_alive_across_days():
+    from core.leetcode import compute_practice_payout
+
+    payout = compute_practice_payout(
+        last_solve_date=date(2026, 6, 5),
+        today=date(2026, 6, 6),
+        current_streak=4,
+        current_level=1,
+        practice_solves_today=0,
+    )
+    assert payout.new_streak == 5
+
+
+def test_find_daily_solve_today_accepts_today_rejects_yesterday():
+    from core.leetcode import find_daily_solve_today
+
+    today_start = 1_000_000  # arbitrary epoch for "start of today"
+    recent = [
+        {"titleSlug": "two-sum", "timestamp": "999999"},      # yesterday
+        {"titleSlug": "two-sum", "timestamp": "1000050"},     # today
+    ]
+    hit = find_daily_solve_today("two-sum", today_start, recent)
+    assert hit is not None and hit["timestamp"] == "1000050"
+
+    miss = find_daily_solve_today(
+        "two-sum", today_start, [{"titleSlug": "two-sum", "timestamp": "999999"}]
+    )
+    assert miss is None
