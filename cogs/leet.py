@@ -694,6 +694,95 @@ class Leet(commands.Cog):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     # ------------------------------------------------------------------
+    # Shared gate + thread helpers (used by /leet and /daily)
+    # ------------------------------------------------------------------
+
+    async def _check_leet_preconditions(
+        self, interaction: discord.Interaction
+    ) -> tuple[int, "crud.LeetcodeLink"] | None:
+        """Shared /leet + /daily gate. Returns (leet_channel_id, link) or None.
+
+        On failure it sends the ephemeral reply and returns None. Caller must
+        have already deferred the interaction. Channel-presence, channel-lock,
+        and verification are enforced here; the progsuvian gate is the command
+        decorator.
+        """
+        assert interaction.guild is not None
+        member = interaction.user
+        async with get_session_factory()() as session:
+            config = await crud.get_or_create_guild_config(
+                session, interaction.guild.id
+            )
+            leet_channel_id = config.leetcode_channel_id
+            link = await crud.get_leetcode_link(session, member.id)
+            await session.commit()
+        if leet_channel_id is None:
+            await interaction.followup.send(
+                "leetcode channel isn't set. an admin needs to run `/setup-leet` first.",
+                ephemeral=True,
+            )
+            return None
+        if interaction.channel_id != leet_channel_id:
+            await interaction.followup.send(
+                f"this only works in <#{leet_channel_id}>.", ephemeral=True
+            )
+            return None
+        if link is None:
+            await interaction.followup.send(
+                "link your leetcode first with `/leetverify <username>`.",
+                ephemeral=True,
+            )
+            return None
+        return leet_channel_id, link
+
+    async def _open_session_thread(
+        self,
+        interaction: discord.Interaction,
+        guild: discord.Guild,
+        leet_channel_id: int,
+        member: discord.Member,
+        problem,
+        label: str,
+    ) -> discord.Thread | None:
+        """Open the private thread for a session. Returns the thread or None
+        (after sending the ephemeral error). ``label`` prefixes the thread name
+        (e.g. 'leet' or 'daily')."""
+        channel = guild.get_channel(leet_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.followup.send(
+                "the configured leetcode channel is missing or not a text channel. "
+                "an admin should re-run `/setup-leet`.",
+                ephemeral=True,
+            )
+            return None
+        try:
+            thread = await channel.create_thread(
+                name=f"{label} · {member.display_name} · {problem.title}"[:100],
+                type=discord.ChannelType.private_thread,
+                invitable=False,
+                auto_archive_duration=1440,
+            )
+            await thread.add_user(member)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "i can't create a private thread here. an admin needs to give me "
+                "**Create Private Threads** (and **Send Messages in Threads**) in "
+                "this channel.",
+                ephemeral=True,
+            )
+            return None
+        except discord.HTTPException as exc:
+            log.warning(
+                "leet: thread creation failed in guild %s: %s", guild.id, exc
+            )
+            await interaction.followup.send(
+                "discord wouldn't let me open your thread, try again in a bit.",
+                ephemeral=True,
+            )
+            return None
+        return thread
+
+    # ------------------------------------------------------------------
     # /leet
     # ------------------------------------------------------------------
 
@@ -712,42 +801,19 @@ class Leet(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         now = datetime.now(timezone.utc)
-        async with get_session_factory()() as session:
-            config = await crud.get_or_create_guild_config(session, guild.id)
-            leet_channel_id = config.leetcode_channel_id
-            link = await crud.get_leetcode_link(session, member.id)
-            await session.commit()
+        pre = await self._check_leet_preconditions(interaction)
+        if pre is None:
+            return
+        leet_channel_id, link = pre
 
-        # Config-presence check.
-        if leet_channel_id is None:
-            await interaction.followup.send(
-                "leetcode channel isn't set. an admin needs to run `/setup-leet` first.",
-                ephemeral=True,
-            )
-            return
-        # Channel-lock.
-        if interaction.channel_id != leet_channel_id:
-            await interaction.followup.send(
-                f"`/leet` only works in <#{leet_channel_id}>.", ephemeral=True
-            )
-            return
-        # Verification gate.
-        if link is None:
-            await interaction.followup.send(
-                "link your leetcode first with `/leetverify <username>`.",
-                ephemeral=True,
-            )
-            return
-
-        # No daily cap (members may run /leet as often as they like), but only
-        # one active session at a time: finish the current problem first.
+        # One active session at a time (daily or practice).
         async with get_session_factory()() as session:
             active = await crud.get_active_assignment(session, member.id, guild.id)
             await session.commit()
         if active is not None:
             where = f" <#{active.thread_id}>" if active.thread_id else ""
             await interaction.followup.send(
-                f"you've already got an active leet session{where}. finish that one first.",
+                f"you've already got an active session{where}. finish that one first.",
                 ephemeral=True,
             )
             return
@@ -772,37 +838,10 @@ class Leet(commands.Cog):
             )
             return
 
-        # Open the private thread off the configured channel.
-        channel = guild.get_channel(leet_channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            await interaction.followup.send(
-                "the configured leetcode channel is missing or not a text channel. "
-                "an admin should re-run `/setup-leet`.",
-                ephemeral=True,
-            )
-            return
-        try:
-            thread = await channel.create_thread(
-                name=f"leet · {member.display_name} · {problem.title}"[:100],
-                type=discord.ChannelType.private_thread,
-                invitable=False,
-                auto_archive_duration=1440,
-            )
-            await thread.add_user(member)
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "i can't create a private thread here. an admin needs to give me "
-                "**Create Private Threads** (and **Send Messages in Threads**) in "
-                "this channel.",
-                ephemeral=True,
-            )
-            return
-        except discord.HTTPException as exc:
-            log.warning("leet: thread creation failed in guild %s: %s", guild.id, exc)
-            await interaction.followup.send(
-                "discord wouldn't let me open your thread, try again in a bit.",
-                ephemeral=True,
-            )
+        thread = await self._open_session_thread(
+            interaction, guild, leet_channel_id, member, problem, "leet"
+        )
+        if thread is None:
             return
 
         expires_at = now + timedelta(minutes=LEET_SESSION_MINUTES)
