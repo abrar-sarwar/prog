@@ -53,23 +53,28 @@ from core.constants import (
 )
 from core.leetcode import (
     code_present_in_bio,
+    find_daily_solve_today,
     find_matching_submission,
     generate_verification_code,
 )
 from core.leetcode_client import (
     LeetCodeUnavailable,
     fetch_all_problems_payload,
+    fetch_daily_challenge,
     fetch_profile,
     fetch_questions_by_tags,
     fetch_recent_accepted,
 )
 from core.leetcode_problems import (
+    get_cached_daily,
+    parse_daily_challenge,
     parse_problem_list,
     parse_question_list,
     parse_question_total,
     pool_size,
     random_problem,
     replace_pool,
+    set_cached_daily,
 )
 from core.leveling import LEVEL_CAP
 from cogs.checks import (
@@ -1002,6 +1007,151 @@ class Leet(commands.Cog):
             )
         except discord.HTTPException as exc:
             log.warning("leet: failed to post problem in thread %s: %s", thread.id, exc)
+
+    # ------------------------------------------------------------------
+    # /daily
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="daily",
+        description="Solve today's official LeetCode daily challenge for the streak multiplier",
+    )
+    @app_commands.guild_only()
+    @requires_progsuvian()
+    async def daily(self, interaction: discord.Interaction) -> None:
+        """Run today's official daily challenge: the streak-multiplier path."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        now = datetime.now(timezone.utc)
+        today = now.date()
+        pre = await self._check_leet_preconditions(interaction)
+        if pre is None:
+            return
+        leet_channel_id, link = pre
+
+        # Already did today's daily? One active session at a time otherwise.
+        async with get_session_factory()() as session:
+            done = await crud.get_completed_daily_for_date(
+                session, member.id, guild.id, today
+            )
+            active = await crud.get_active_assignment(session, member.id, guild.id)
+            await session.commit()
+        if done is not None:
+            await interaction.followup.send(
+                "you've already done today's daily. come back tomorrow, or run "
+                "`/leet` to practice a topic.",
+                ephemeral=True,
+            )
+            return
+        if active is not None:
+            where = f" <#{active.thread_id}>" if active.thread_id else ""
+            await interaction.followup.send(
+                f"you've already got an active session{where}. finish that one first.",
+                ephemeral=True,
+            )
+            return
+
+        # Resolve today's daily problem (cache, else fetch).
+        problem = get_cached_daily(today.isoformat())
+        if problem is None:
+            try:
+                data = await fetch_daily_challenge()
+            except LeetCodeUnavailable as exc:
+                log.warning("daily: fetch failed: %s", exc)
+                await interaction.followup.send(
+                    "couldn't reach leetcode for today's daily, try again in a bit.",
+                    ephemeral=True,
+                )
+                return
+            parsed = parse_daily_challenge(data)
+            if parsed is None:
+                await interaction.followup.send(
+                    "couldn't read today's daily from leetcode, try again in a bit.",
+                    ephemeral=True,
+                )
+                return
+            date_str, problem = parsed
+            set_cached_daily(date_str, problem)
+
+        # Already solved today on leetcode (anytime today UTC)? Instant award.
+        today_start_epoch = int(
+            datetime(today.year, today.month, today.day, tzinfo=timezone.utc).timestamp()
+        )
+        try:
+            recent = await fetch_recent_accepted(
+                link.leetcode_username, LEET_RECENT_AC_LIMIT
+            )
+        except LeetCodeUnavailable as exc:
+            log.warning("daily: recent-AC check failed for %s: %s", member.id, exc)
+            recent = []
+        if recent and find_daily_solve_today(problem.slug, today_start_epoch, recent):
+            async with get_session_factory()() as session:
+                assignment = await crud.create_assignment(
+                    session,
+                    discord_user_id=member.id,
+                    guild_id=guild.id,
+                    problem_slug=problem.slug,
+                    problem_title=problem.title,
+                    difficulty=problem.difficulty,
+                    assigned_at=now,
+                    expires_at=now,
+                    thread_id=None,
+                    kind="daily",
+                    daily_date=today,
+                )
+                assignment_id = assignment.id
+                await session.commit()
+            await self._award_solve(member, assignment_id, 0, "daily")
+            await interaction.followup.send(
+                f"nice, you already solved today's daily (**{problem.title}**). "
+                "counted it.",
+                ephemeral=True,
+            )
+            return
+
+        # Otherwise open a thread + start the detection session.
+        thread = await self._open_session_thread(
+            interaction, guild, leet_channel_id, member, problem, "daily"
+        )
+        if thread is None:
+            return
+
+        expires_at = now + timedelta(minutes=LEET_SESSION_MINUTES)
+        async with get_session_factory()() as session:
+            assignment = await crud.create_assignment(
+                session,
+                discord_user_id=member.id,
+                guild_id=guild.id,
+                problem_slug=problem.slug,
+                problem_title=problem.title,
+                difficulty=problem.difficulty,
+                assigned_at=now,
+                expires_at=expires_at,
+                thread_id=thread.id,
+                kind="daily",
+                daily_date=today,
+            )
+            assignment_id = assignment.id
+            await session.commit()
+
+        await self._post_problem(thread, member, problem, expires_at)
+        await interaction.followup.send(
+            f"today's daily is in {thread.mention}. good luck.", ephemeral=True
+        )
+        self._start_session(
+            member,
+            assignment_id,
+            thread.id,
+            problem.slug,
+            link.leetcode_username,
+            now,
+            expires_at,
+            "daily",
+        )
 
     # ------------------------------------------------------------------
     # Session lifecycle
