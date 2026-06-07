@@ -99,13 +99,28 @@ LEET_REWARD_CAP_FRACTION: float = 1.5
 LEET_REWARD_STREAK_MILESTONE_DAYS: int = 14
 """Streak length (consecutive UTC solve-days) at which the reward hits the cap."""
 
-LEET_EXTRA_SOLVE_XP: int = 25
-"""Flat XP for each EXTRA /leet solve on a day the user has already solved.
+# --- /leet practice payout (reduced, capped rate) -------------------------
 
-Members may run /leet as many times as they like per day, but only the first
-solve of the UTC day pays the streak-scaled reward (one "multiplier" per day);
-each additional solve grants this small flat amount and still bumps the solved
-total. Keeps grinding rewarding without making XP farmable."""
+LEET_PRACTICE_FRACTION: float = 0.25
+"""Fraction of the next level's XP cost paid for a practice (/leet) solve, for
+the first LEET_PRACTICE_DAILY_CAP solves of the UTC day."""
+
+LEET_PRACTICE_DAILY_CAP: int = 3
+"""How many practice solves per UTC day earn the fraction reward. Further solves
+that day earn the flat LEET_PRACTICE_OVERFLOW_XP token."""
+
+LEET_PRACTICE_OVERFLOW_XP: int = 10
+"""Flat XP for each practice solve beyond the daily cap. Keeps grinding mildly
+rewarded without being farmable."""
+
+# --- /leet topic-tag scoping ----------------------------------------------
+
+LEET_MAX_TAGS: int = 3
+"""Maximum topic tags a member may pass to /leet (keeps problems scoped but not
+targetable to a single problem)."""
+
+LEET_TAG_QUERY_PAGE: int = 50
+"""Page size for the tag-filtered problem query against LeetCode."""
 
 LEET_REWARD_ROLE_DURATION_HOURS: int = 24
 """How long the configured reward role stays on a user after a solve before a

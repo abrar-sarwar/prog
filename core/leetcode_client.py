@@ -62,6 +62,41 @@ query progRecentAc($username: String!, $limit: Int!) {
 }
 """
 
+_DAILY_CHALLENGE_QUERY = """
+query progDailyChallenge {
+  activeDailyCodingChallengeQuestion {
+    date
+    link
+    question {
+      titleSlug
+      title
+      difficulty
+    }
+  }
+}
+"""
+
+_QUESTION_LIST_QUERY = """
+query progProblemList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
+  problemsetQuestionList: questionList(
+    categorySlug: $categorySlug
+    limit: $limit
+    skip: $skip
+    filters: $filters
+  ) {
+    total: totalNum
+    questions: data {
+      title
+      titleSlug
+      difficulty
+      paidOnly
+    }
+  }
+}
+"""
+
+_PROBLEMSET_REFERER = "https://leetcode.com/problemset/all/"
+
 
 class LeetCodeError(Exception):
     """Base class for LeetCode client errors."""
@@ -201,6 +236,35 @@ async def fetch_recent_accepted(
     if not isinstance(rows, list):
         return []
     return rows
+
+
+async def fetch_daily_challenge() -> dict:
+    """Return the GraphQL ``data`` for LeetCode's active daily challenge.
+
+    Caller parses it via :func:`core.leetcode_problems.parse_daily_challenge`.
+    Raises :class:`LeetCodeUnavailable` on a soft failure.
+    """
+    return await _graphql(_DAILY_CHALLENGE_QUERY, {}, _PROBLEMSET_REFERER)
+
+
+async def fetch_questions_by_tags(
+    tag_slugs: list[str], limit: int, skip: int = 0
+) -> dict:
+    """Return the GraphQL ``data`` for problems carrying all of ``tag_slugs``.
+
+    LeetCode AND-filters the tags. The result includes ``total`` (for random
+    paging) and a page of ``questions`` (each with ``paidOnly``); caller parses
+    via :func:`core.leetcode_problems.parse_question_list` /
+    :func:`parse_question_total`. Raises :class:`LeetCodeUnavailable` on a soft
+    failure.
+    """
+    variables = {
+        "categorySlug": "",
+        "limit": limit,
+        "skip": skip,
+        "filters": {"tags": list(tag_slugs)},
+    }
+    return await _graphql(_QUESTION_LIST_QUERY, variables, _PROBLEMSET_REFERER)
 
 
 async def fetch_all_problems_payload() -> dict:

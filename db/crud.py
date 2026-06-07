@@ -16,7 +16,7 @@ each other.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple, Sequence
 
 from sqlalchemy import and_, func, or_, select, update
@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.leetcode import compute_solve_payout
+from core.leetcode import compute_daily_payout, compute_practice_payout
 from core.leveling import LEVEL_CAP, cumulative_xp_to_level, level_from_total_xp
 from db.models import (
     GuildConfig,
@@ -673,6 +673,39 @@ async def get_active_assignment(
     return (await session.execute(stmt)).scalars().first()
 
 
+async def get_completed_daily_for_date(
+    session: AsyncSession, discord_user_id: int, guild_id: int, daily_date: date
+) -> LeetcodeAssignment | None:
+    """Return the user's completed daily-challenge assignment for ``daily_date``
+    in this guild, or None. Used to block a second /daily on the same UTC day."""
+    stmt = select(LeetcodeAssignment).where(
+        LeetcodeAssignment.discord_user_id == discord_user_id,
+        LeetcodeAssignment.guild_id == guild_id,
+        LeetcodeAssignment.kind == "daily",
+        LeetcodeAssignment.daily_date == daily_date,
+        LeetcodeAssignment.status == "completed",
+    )
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def count_practice_solves_today(
+    session: AsyncSession, discord_user_id: int, guild_id: int, today: date
+) -> int:
+    """Count completed practice (/leet) solves for this user/guild on ``today``
+    (UTC). Drives the practice daily cap in :func:`compute_practice_payout`."""
+    start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    stmt = select(func.count(LeetcodeAssignment.id)).where(
+        LeetcodeAssignment.discord_user_id == discord_user_id,
+        LeetcodeAssignment.guild_id == guild_id,
+        LeetcodeAssignment.kind == "practice",
+        LeetcodeAssignment.status == "completed",
+        LeetcodeAssignment.completed_at >= start,
+        LeetcodeAssignment.completed_at < end,
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
 async def create_assignment(
     session: AsyncSession,
     *,
@@ -684,6 +717,8 @@ async def create_assignment(
     assigned_at: datetime,
     expires_at: datetime,
     thread_id: int | None = None,
+    kind: str = "practice",
+    daily_date: date | None = None,
 ) -> LeetcodeAssignment:
     """Insert a new active assignment row and return it."""
     assignment = LeetcodeAssignment(
@@ -696,6 +731,8 @@ async def create_assignment(
         expires_at=expires_at,
         thread_id=thread_id,
         status="active",
+        kind=kind,
+        daily_date=daily_date,
     )
     session.add(assignment)
     await session.flush()  # populate assignment.id for the caller
@@ -776,12 +813,13 @@ async def extend_assignment_expiry(
 
 
 class LeetSolveResult(NamedTuple):
-    """Outcome of recording a confirmed /leet solve."""
+    """Outcome of recording a confirmed solve."""
 
     change: LevelChange
     reward_xp: int
     new_streak: int
-    first_of_day: bool
+    kind: str
+    capped: bool
 
 
 async def record_leet_solve(
@@ -789,22 +827,33 @@ async def record_leet_solve(
     guild_id: int,
     user_id: int,
     today: date,
+    *,
+    kind: str = "practice",
+    practice_solves_today: int = 0,
 ) -> LeetSolveResult:
-    """Apply a confirmed solve: streak, total, and XP, atomically.
+    """Apply a confirmed solve (XP + streak + total), atomically.
 
-    Locks the user row and derives the payout via
-    :func:`core.leetcode.compute_solve_payout`: the first solve of the UTC day
-    pays the streak-scaled reward and advances the streak; every additional solve
-    that day pays a small flat amount and leaves the streak unchanged (one daily
-    "multiplier"). Either way the solved total is bumped, the XP is added to the
-    cumulative total that feeds the rank card, and the level is recomputed. The
-    XP flows through the same ``xp``/level pipeline as messages and voice.
+    Locks the user row and derives the payout by kind:
+    ``daily`` pays the streak-scaled multiplier (:func:`compute_daily_payout`);
+    ``practice`` pays the reduced, capped rate (:func:`compute_practice_payout`,
+    using ``practice_solves_today``). Either way the solved total is bumped, the
+    streak is kept alive, XP flows through the same ``xp``/level pipeline as
+    messages and voice, and the level is recomputed.
     """
     user = await _lock_user(session, guild_id, user_id)
     old_level = user.level
-    payout = compute_solve_payout(
-        user.leetcode_last_solve_date, today, user.leetcode_streak, old_level
-    )
+    if kind == "daily":
+        payout = compute_daily_payout(
+            user.leetcode_last_solve_date, today, user.leetcode_streak, old_level
+        )
+    else:
+        payout = compute_practice_payout(
+            user.leetcode_last_solve_date,
+            today,
+            user.leetcode_streak,
+            old_level,
+            practice_solves_today,
+        )
     user.xp = user.xp + payout.reward_xp
     user.leetcode_solved_total = user.leetcode_solved_total + 1
     user.leetcode_streak = payout.new_streak
@@ -814,7 +863,8 @@ async def record_leet_solve(
         change=LevelChange(user=user, old_level=old_level, new_level=user.level),
         reward_xp=payout.reward_xp,
         new_streak=payout.new_streak,
-        first_of_day=payout.first_of_day,
+        kind=payout.kind,
+        capped=payout.capped,
     )
 
 

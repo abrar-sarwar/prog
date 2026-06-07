@@ -9,8 +9,8 @@ role on first interaction, advances members through a club-themed tier ladder
 Challenger → Ascendant → Aura`), supports per-channel and per-role XP
 multipliers, keeps a persistent **image leaderboard** that updates whenever the
 standings change, welcomes new members, restores roles on rejoin, and runs a
-`/leet` feature that hands out real LeetCode problems and grants XP for verified
-solves.
+`/daily` + `/leet` feature that hands out real LeetCode problems and grants XP
+for verified solves.
 
 XP earning is **opt-in per server**: a freshly-added guild starts with earning
 OFF until an admin runs `/enable-xp`.
@@ -120,8 +120,9 @@ gate fails open and anyone can use them.
 |---|---|
 | `/rank [user]` | Server-rendered trophy card: tier, level, total XP, in-level progress, server rank, LeetCode stats. Defaults to the invoker. |
 | `/leaderboard` | Paginated guild leaderboard, 10 per page. Footer always shows the invoker's own rank, even if off-page. |
-| `/leet` | Get a random LeetCode problem in a private thread (needs `/setup-leet` + a verified account). |
-| `/leetverify <username>` | Link your LeetCode account so `/leet` can detect solves (drops a one-time `progsu-XXXX` code in your profile bio). |
+| `/daily` | Today's official LeetCode daily challenge (same problem for everyone). Pays the streak-scaled multiplier once per UTC day; counts a solve done anytime today (UTC). Instant award if already solved before running the command. |
+| `/leet [tag1] [tag2] [tag3]` | Practice: a random free LeetCode problem. Reduced, capped XP (see below). Optional up to 3 autocompleted topic tags, AND-filtered. |
+| `/leetverify <username>` | Link your LeetCode account so `/daily` and `/leet` can detect solves (drops a one-time `progsu-XXXX` code in your profile bio). |
 
 ### Admin (requires `Manage Server`)
 
@@ -145,10 +146,10 @@ gate fails open and anyone can use them.
 | `/setup-intro-channel <channel>` | Target of the `{intro_channel}` placeholder. |
 | `/setup-welcome-message <message>` | Edit the welcome copy. |
 | `/disable-welcome` | Stop posting welcomes (keeps saved text). |
-| `/setup-leet <channel>` | Set the channel `/leet` runs in (required before the feature works). |
-| `/setup-leet-reward <role>` | Set a role granted for 24h on a `/leet` solve. |
+| `/setup-leet <channel>` | Set the channel `/daily` and `/leet` run in (required before the feature works). |
+| `/setup-leet-reward <role>` | Set a role granted for 24h on a confirmed solve. |
 | `/approve-leet <user>` | Manually approve a member's active LeetCode session as solved. |
-| `/leet-stats` | List members who've completed `/leet` problems and their stats. |
+| `/leet-stats` | List members' LeetCode solve counts and streak stats. |
 | `/reset-leet-stats [user]` | Reset LeetCode stats for a member or the whole server. |
 | `/migrate-rank-roles` | Rename legacy ladder roles to the new tier names and remap thresholds. Safe to run repeatedly. |
 | `/resync-roles` | Re-apply ladder roles to every member based on current level. |
@@ -223,29 +224,78 @@ the current top 10, rendered server-side with Pillow.
   whenever the standings change.
 - `/force-leaderboard-update` bypasses the cache and pushes a fresh render.
 
-## /leet (LeetCode website-solve feature)
+## /daily and /leet (LeetCode website-solve feature)
 
-A verified member runs `/leet` in the configured channel, gets a random real
-LeetCode problem in a private thread, solves it on leetcode.com, and the bot
+Verified members solve real LeetCode problems on leetcode.com and the bot
 detects their accepted submission by polling their **public** profile - no
 screenshots, no pasted code, no OAuth.
 
+### /daily - official daily challenge
+
+`/daily` gives each member today's official LeetCode daily problem (the same
+problem for everyone each UTC day).
+
+- Pays the **streak-scaled multiplier**: `LEET_REWARD_BASE_FRACTION` to
+  `LEET_REWARD_CAP_FRACTION` of the XP cost to reach the next level, scaled by
+  the member's consecutive-UTC-day streak up to `LEET_REWARD_STREAK_MILESTONE_DAYS`.
+- One per UTC day: a second `/daily` the same day is blocked.
+- If the member already solved today's daily on leetcode.com before running
+  `/daily`, the bot detects it instantly and awards without opening a thread.
+- Detection rule: the slug must appear in the recent accepted list with a
+  timestamp at or after UTC midnight today (`find_daily_solve_today`).
+
+### /leet - practice
+
+`/leet [tag1] [tag2] [tag3]` gives a random free problem, optionally scoped to
+up to `LEET_MAX_TAGS` topic tags (AND-filtered, autocompleted). An impossible
+tag combination replies "no free problems match ... drop a tag".
+
+- Pays a **reduced, capped rate**: the first `LEET_PRACTICE_DAILY_CAP` practice
+  solves of the UTC day each pay `LEET_PRACTICE_FRACTION` of the next level's XP
+  cost. Further practice solves that day pay the flat `LEET_PRACTICE_OVERFLOW_XP`
+  token.
+- Detection rule: the assigned slug must appear in the recent accepted list with
+  a timestamp **after** the assignment, so a pre-existing solve never counts
+  (`find_matching_submission`).
+
+### Streak rule
+
+Any confirmed solve - daily or practice - keeps the consecutive-UTC-day streak
+alive and increments the solved total. Only `/daily` pays the streak-scaled
+multiplier; `/leet` never does.
+
+### Shared behavior
+
 - `/leetverify <username>` links an account by dropping a one-time `progsu-XXXX`
   code in the LeetCode profile bio.
+- Only one active session at a time (daily or practice).
 - The problem pool is built from every free (non-premium) problem and refreshed
   periodically; a committed snapshot keeps it populated between refreshes.
-- Detection only counts a solve whose accepted-submission timestamp is **after**
-  the assignment, so a pre-existing solve never counts; each assignment pays out
-  at most once.
-- The reward is **level-scaled**, not flat: the first solve of a UTC day pays a
-  fraction of the XP needed to reach the next level, scaling with the member's
-  consecutive-day streak up to a cap. Additional solves the same day pay a small
-  flat amount and still bump the solved total.
 - An optional reward role (`/setup-leet-reward`) is granted for 24h on a solve;
   re-earning refreshes the timer rather than stacking. A background sweep
   removes expired grants and reaps stale sessions.
 
-All `/leet` timing and reward knobs live in `core/constants.py`.
+All timing and reward knobs live in `core/constants.py`.
+
+### Manual verification (/daily + /leet)
+
+Run these against a dev guild after `alembic upgrade head` (migration
+`f3b9c1d4e2a7` adds `leetcode_assignments.kind` and `daily_date`):
+
+- [ ] `/daily` opens a thread with today's LeetCode daily; solving it on
+  leetcode.com gets detected and pays the multiplier; streak advances.
+- [ ] Running `/daily` again the same day is blocked ("already done today's
+  daily").
+- [ ] If you solved today's daily before running `/daily`, it awards instantly
+  with no thread.
+- [ ] `/leet` with no tags pays the reduced practice rate; after
+  `LEET_PRACTICE_DAILY_CAP` practice solves on the same UTC day the payout
+  drops to the `LEET_PRACTICE_OVERFLOW_XP` token.
+- [ ] `/leet tag1:dynamic-programming tag2:array` autocompletes and yields a
+  DP+array problem; an impossible tag combo replies "no free problems match ...
+  drop a tag".
+- [ ] A practice solve on a fresh day keeps the streak alive (streak count
+  increments).
 
 ## Project layout
 
@@ -275,7 +325,7 @@ cogs/                         Discord glue
   commands.py                 /rank, /leaderboard
   admin.py                    all admin slash commands
   leaderboard_channel.py      change-driven leaderboard image + /force-leaderboard-update
-  leet.py                     /leet, /leetverify + leet admin commands
+  leet.py                     /daily, /leet, /leetverify + leet admin commands
   checks.py                   requires_progsuvian app-command gate
 migrations/                   Alembic versions
 tests/                        pytest unit tests for the pure-logic modules
