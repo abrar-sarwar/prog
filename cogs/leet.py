@@ -1,26 +1,42 @@
-"""LeetCode website-solve feature (the /leet command).
+"""LeetCode website-solve feature (/daily and /leet commands).
 
-A verified user runs ``/leet`` in the configured channel, gets a random real
-LeetCode problem in a private thread, solves it on leetcode.com, and the bot
-detects their accepted submission by polling their PUBLIC profile — no
-screenshots, no pasted code, no OAuth. A confirmed solve pays streak-scaled XP
-through the existing XP pipeline (feeding the rank card) and optionally grants a
-timed reward role.
+A verified user runs ``/daily`` or ``/leet`` in the configured channel and the
+bot detects their accepted submission on leetcode.com by polling their PUBLIC
+profile - no screenshots, no pasted code, no OAuth. Confirmed solves pay XP
+through the existing pipeline and optionally grant a timed reward role.
 
-Commands:
+Commands (user-facing):
 
-* ``/leetverify <username>`` - link a LeetCode account by dropping a one-time
-  ``progsu-XXXX`` code in the profile bio.
-* ``/leet``                  - start a session (gated on setup + verification;
-  no daily cap, but one active session at a time).
-* ``/setup-leet <channel>``        - admin: set the designated channel.
-* ``/setup-leet-reward <role>``    - admin: set the timed reward role.
+* ``/daily``                        - today's official LeetCode daily challenge
+  (the same problem for everyone). Pays the streak-scaled multiplier once per
+  UTC day. If the user already solved today's daily on leetcode.com before
+  running the command, the award is instant with no thread. One per UTC day;
+  running it again is blocked after the first confirmed solve.
+* ``/leet [tag1] [tag2] [tag3]``    - practice: a random free problem, with up
+  to ``LEET_MAX_TAGS`` autocompleted topic tags (AND-filtered). Pays a reduced,
+  capped rate: the first ``LEET_PRACTICE_DAILY_CAP`` practice solves of the UTC
+  day earn ``LEET_PRACTICE_FRACTION`` of the next level's XP cost; further
+  solves pay the flat ``LEET_PRACTICE_OVERFLOW_XP`` token.
+* ``/leetverify <username>``        - link a LeetCode account by dropping a
+  one-time ``progsu-XXXX`` code in the profile bio.
 
-Detection rule (see :func:`core.leetcode.find_matching_submission`): the
-assigned problem's slug must appear in the user's recent accepted submissions
-with a timestamp later than the assignment — so a pre-existing solve never
-counts. Each assignment pays out at most once (the ``complete_assignment``
-status guard).
+Commands (admin):
+
+* ``/setup-leet <channel>``         - set the designated leet channel.
+* ``/setup-leet-reward <role>``     - set the timed reward role.
+* ``/approve-leet <user>``          - manually approve an active session.
+* ``/leet-stats``                   - list members' solve counts and streaks.
+* ``/reset-leet-stats [user]``      - reset stats for a member or the whole guild.
+
+Streak rule: any confirmed solve (daily or practice) keeps the
+consecutive-UTC-day streak alive. Only ``/daily`` pays the streak-scaled
+multiplier; ``/leet`` never does.
+
+Detection rules differ by kind: daily uses "solved anytime today (UTC)"
+(:func:`core.leetcode.find_daily_solve_today`); practice uses "after
+assignment" (:func:`core.leetcode.find_matching_submission`). Each assignment
+pays out at most once (the ``complete_assignment`` status guard). Only one
+active session is allowed at a time (daily or practice).
 """
 
 from __future__ import annotations

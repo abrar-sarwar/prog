@@ -128,7 +128,6 @@ class SolvePayout(NamedTuple):
     capped: bool    # practice solve over the daily cap (token payout)
 
 
-
 def compute_daily_payout(
     last_solve_date: date | None,
     today: date,
