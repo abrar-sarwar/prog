@@ -236,6 +236,14 @@ class LeetcodeAssignment(Base):
     )
     thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'practice'")
+    )
+    """'daily' (official daily challenge, multiplier payout) or 'practice'
+    (/leet, reduced+capped payout). Existing rows default to 'practice'."""
+    daily_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    """For kind='daily' only: the UTC date of the daily challenge. Enforces one
+    daily per UTC day and is unambiguous across the midnight boundary."""
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
