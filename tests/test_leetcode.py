@@ -357,8 +357,8 @@ def test_parse_question_list_filters_premium_and_keeps_free():
         "problemsetQuestionList": {
             "total": 2,
             "questions": [
-                {"title": "Two Sum", "titleSlug": "two-sum", "difficulty": "Easy", "paidOnly": False},
-                {"title": "Paid", "titleSlug": "paid", "difficulty": "Hard", "paidOnly": True},
+                {"title": "Two Sum", "titleSlug": "two-sum", "difficulty": "Easy", "isPaidOnly": False},
+                {"title": "Paid", "titleSlug": "paid", "difficulty": "Hard", "isPaidOnly": True},
             ],
         }
     }
@@ -375,6 +375,38 @@ def test_parse_question_list_handles_garbage():
     assert parse_question_list({"problemsetQuestionList": {"questions": "nope"}}) == []
     assert parse_question_total({}) == 0
     assert parse_question_total({"problemsetQuestionList": {}}) == 0
+
+
+def test_question_list_query_uses_ispaidonly():
+    # Regression guard: LeetCode renamed paidOnly -> isPaidOnly; the old field
+    # made every tag/difficulty query 400. The query must request the new name.
+    from core.leetcode_client import _QUESTION_LIST_QUERY
+
+    assert "isPaidOnly" in _QUESTION_LIST_QUERY
+
+
+def test_fetch_filtered_questions_builds_filters(monkeypatch):
+    import asyncio
+
+    import core.leetcode_client as client
+
+    captured = {}
+
+    async def _fake_graphql(query, variables, referer):
+        captured["variables"] = variables
+        return {}
+
+    monkeypatch.setattr(client, "_graphql", _fake_graphql)
+
+    def filters_for(tags, difficulty):
+        captured.clear()
+        asyncio.run(client.fetch_filtered_questions(tags, difficulty, limit=5))
+        return captured["variables"]["filters"]
+
+    assert filters_for(["array"], None) == {"tags": ["array"]}
+    assert filters_for([], "HARD") == {"difficulty": "HARD"}
+    assert filters_for(["array"], "EASY") == {"tags": ["array"], "difficulty": "EASY"}
+    assert filters_for([], None) == {}  # no filters -> empty (caller uses the pool)
 
 
 def test_daily_cache_round_trips_by_date():

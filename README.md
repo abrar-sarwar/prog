@@ -121,7 +121,7 @@ gate fails open and anyone can use them.
 | `/rank [user]` | Server-rendered trophy card: tier, level, total XP, in-level progress, server rank, LeetCode stats. Defaults to the invoker. |
 | `/leaderboard` | Paginated guild leaderboard, 10 per page. Footer always shows the invoker's own rank, even if off-page. |
 | `/daily` | Today's official LeetCode daily challenge (same problem for everyone). Pays the streak-scaled multiplier once per UTC day; counts a solve done anytime today (UTC). Instant award if already solved before running the command. |
-| `/leet [tag1] [tag2] [tag3]` | Practice: a random free LeetCode problem. Reduced, capped XP (see below). Optional up to 3 autocompleted topic tags, AND-filtered. |
+| `/leet [tag] [difficulty]` | Practice: a random free LeetCode problem. Reduced, capped XP (see below). Optional autocompleted topic tag and Easy/Medium/Hard difficulty (combine; neither = fully random). |
 | `/leetverify <username>` | Link your LeetCode account so `/daily` and `/leet` can detect solves (drops a one-time `progsu-XXXX` code in your profile bio). |
 
 ### Admin (requires `Manage Server`)
@@ -248,9 +248,10 @@ problem for everyone each UTC day).
 
 ### /leet - practice
 
-`/leet [tag1] [tag2] [tag3]` gives a random free problem, optionally scoped to
-up to `LEET_MAX_TAGS` topic tags (AND-filtered, autocompleted). An impossible
-tag combination replies "no free problems match ... drop a tag".
+`/leet [tag] [difficulty]` gives a random free problem, optionally scoped to a
+topic tag (autocompleted) and/or an Easy/Medium/Hard difficulty (they combine).
+With neither argument it pulls a random free problem from the pool. An
+impossible combination replies "no free problems match ... try a different combo".
 
 - Pays a **reduced, capped rate**: the first `LEET_PRACTICE_DAILY_CAP` practice
   solves of the UTC day each pay `LEET_PRACTICE_FRACTION` of the next level's XP
@@ -293,9 +294,9 @@ Run these against a dev guild after `alembic upgrade head` (migration
 - [ ] `/leet` with no tags pays the reduced practice rate; after
   `LEET_PRACTICE_DAILY_CAP` practice solves on the same UTC day the payout
   drops to the `LEET_PRACTICE_OVERFLOW_XP` token.
-- [ ] `/leet tag1:dynamic-programming tag2:array` autocompletes and yields a
-  DP+array problem; an impossible tag combo replies "no free problems match ...
-  drop a tag".
+- [ ] `/leet tag:dynamic-programming difficulty:Hard` autocompletes and yields a
+  hard DP problem; an impossible combo replies "no free problems match ... try a
+  different combo".
 - [ ] A practice solve on a fresh day keeps the streak alive (streak count
   increments).
 

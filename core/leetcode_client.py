@@ -89,7 +89,7 @@ query progProblemList($categorySlug: String, $limit: Int, $skip: Int, $filters: 
       title
       titleSlug
       difficulty
-      paidOnly
+      isPaidOnly
     }
   }
 }
@@ -247,22 +247,32 @@ async def fetch_daily_challenge() -> dict:
     return await _graphql(_DAILY_CHALLENGE_QUERY, {}, _PROBLEMSET_REFERER)
 
 
-async def fetch_questions_by_tags(
-    tag_slugs: list[str], limit: int, skip: int = 0
+async def fetch_filtered_questions(
+    tag_slugs: list[str],
+    difficulty: str | None,
+    limit: int,
+    skip: int = 0,
 ) -> dict:
-    """Return the GraphQL ``data`` for problems carrying all of ``tag_slugs``.
+    """Return the GraphQL ``data`` for problems matching the given filters.
 
-    LeetCode AND-filters the tags. The result includes ``total`` (for random
-    paging) and a page of ``questions`` (each with ``paidOnly``); caller parses
-    via :func:`core.leetcode_problems.parse_question_list` /
+    Any combination of ``tag_slugs`` (AND-filtered) and ``difficulty`` (one of
+    ``"EASY"``/``"MEDIUM"``/``"HARD"``) is applied; pass an empty list / None to
+    omit that filter. The result includes ``total`` (for random paging) and a
+    page of ``questions`` (each with ``isPaidOnly``); caller parses via
+    :func:`core.leetcode_problems.parse_question_list` /
     :func:`parse_question_total`. Raises :class:`LeetCodeUnavailable` on a soft
     failure.
     """
+    filters: dict[str, object] = {}
+    if tag_slugs:
+        filters["tags"] = list(tag_slugs)
+    if difficulty:
+        filters["difficulty"] = difficulty
     variables = {
         "categorySlug": "",
         "limit": limit,
         "skip": skip,
-        "filters": {"tags": list(tag_slugs)},
+        "filters": filters,
     }
     return await _graphql(_QUESTION_LIST_QUERY, variables, _PROBLEMSET_REFERER)
 

@@ -113,14 +113,10 @@ LEET_PRACTICE_OVERFLOW_XP: int = 10
 """Flat XP for each practice solve beyond the daily cap. Keeps grinding mildly
 rewarded without being farmable."""
 
-# --- /leet topic-tag scoping ----------------------------------------------
-
-LEET_MAX_TAGS: int = 3
-"""Maximum topic tags a member may pass to /leet (keeps problems scoped but not
-targetable to a single problem)."""
+# --- /leet topic + difficulty scoping -------------------------------------
 
 LEET_TAG_QUERY_PAGE: int = 50
-"""Page size for the tag-filtered problem query against LeetCode."""
+"""Page size for the tag/difficulty-filtered problem query against LeetCode."""
 
 LEET_REWARD_ROLE_DURATION_HOURS: int = 24
 """How long the configured reward role stays on a user after a solve before a

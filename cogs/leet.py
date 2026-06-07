@@ -12,11 +12,12 @@ Commands (user-facing):
   UTC day. If the user already solved today's daily on leetcode.com before
   running the command, the award is instant with no thread. One per UTC day;
   running it again is blocked after the first confirmed solve.
-* ``/leet [tag1] [tag2] [tag3]``    - practice: a random free problem, with up
-  to ``LEET_MAX_TAGS`` autocompleted topic tags (AND-filtered). Pays a reduced,
-  capped rate: the first ``LEET_PRACTICE_DAILY_CAP`` practice solves of the UTC
-  day earn ``LEET_PRACTICE_FRACTION`` of the next level's XP cost; further
-  solves pay the flat ``LEET_PRACTICE_OVERFLOW_XP`` token.
+* ``/leet [tag] [difficulty]``      - practice: a random free problem, with an
+  optional autocompleted topic tag and an optional Easy/Medium/Hard difficulty
+  (both combine; neither = a random pool problem). Pays a reduced, capped rate:
+  the first ``LEET_PRACTICE_DAILY_CAP`` practice solves of the UTC day earn
+  ``LEET_PRACTICE_FRACTION`` of the next level's XP cost; further solves pay the
+  flat ``LEET_PRACTICE_OVERFLOW_XP`` token.
 * ``/leetverify <username>``        - link a LeetCode account by dropping a
   one-time ``progsu-XXXX`` code in the profile bio.
 
@@ -46,7 +47,7 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Literal
 
 import discord
 from discord import app_commands
@@ -58,7 +59,6 @@ from core.constants import (
     LEET_EXTEND_MINUTES,
     LEET_EXTEND_PROMPT_BEFORE_SECONDS,
     LEET_GRANT_SWEEP_SECONDS,
-    LEET_MAX_TAGS,
     LEET_POLL_MAX_SECONDS,
     LEET_POLL_MIN_SECONDS,
     LEET_POOL_REFRESH_HOURS,
@@ -78,7 +78,7 @@ from core.leetcode_client import (
     fetch_all_problems_payload,
     fetch_daily_challenge,
     fetch_profile,
-    fetch_questions_by_tags,
+    fetch_filtered_questions,
     fetch_recent_accepted,
 )
 from core.leetcode_problems import (
@@ -819,19 +819,28 @@ class Leet(commands.Cog):
             return None
         return thread
 
-    async def _pick_tagged_problem(
-        self, tag_slugs: list[str], exclude_slugs: set
+    async def _pick_filtered_problem(
+        self, tag_slug: str | None, difficulty: str | None, exclude_slugs: set
     ):
-        """Pick a random free problem carrying all ``tag_slugs``.
+        """Pick a random free problem matching the tag and/or difficulty filter.
 
-        Queries LeetCode for the filtered total, then a random page, and picks a
-        free problem not in ``exclude_slugs``. Returns a LeetProblem, or None if
-        nothing matches / LeetCode is unavailable.
+        ``difficulty`` is LeetCode's filter value (``EASY``/``MEDIUM``/``HARD``)
+        or None. Queries LeetCode for the filtered total, then a random page, and
+        picks a free problem not in ``exclude_slugs``. Returns a LeetProblem, or
+        None if nothing matches / LeetCode is unavailable.
         """
+        tag_slugs = [tag_slug] if tag_slug else []
         try:
-            head = await fetch_questions_by_tags(tag_slugs, limit=1, skip=0)
+            head = await fetch_filtered_questions(
+                tag_slugs, difficulty, limit=1, skip=0
+            )
         except LeetCodeUnavailable as exc:
-            log.warning("leet: tag query (head) failed for %s: %s", tag_slugs, exc)
+            log.warning(
+                "leet: filtered query (head) failed tag=%s diff=%s: %s",
+                tag_slug,
+                difficulty,
+                exc,
+            )
             return None
         total = parse_question_total(head)
         if total <= 0:
@@ -839,11 +848,16 @@ class Leet(commands.Cog):
         skip = random.randint(0, max(0, total - 1))
         start = min(skip, max(0, total - LEET_TAG_QUERY_PAGE))
         try:
-            page = await fetch_questions_by_tags(
-                tag_slugs, limit=LEET_TAG_QUERY_PAGE, skip=start
+            page = await fetch_filtered_questions(
+                tag_slugs, difficulty, limit=LEET_TAG_QUERY_PAGE, skip=start
             )
         except LeetCodeUnavailable as exc:
-            log.warning("leet: tag query (page) failed for %s: %s", tag_slugs, exc)
+            log.warning(
+                "leet: filtered query (page) failed tag=%s diff=%s: %s",
+                tag_slug,
+                difficulty,
+                exc,
+            )
             return None
         problems = parse_question_list(page)
         candidates = [p for p in problems if p.slug not in exclude_slugs]
@@ -859,26 +873,26 @@ class Leet(commands.Cog):
 
     @app_commands.command(
         name="leet",
-        description="Practice: a random LeetCode problem, optionally scoped to topics",
+        description="Practice: a random LeetCode problem, optionally by topic and/or difficulty",
     )
     @app_commands.describe(
-        tag1="Optional topic to scope the problem",
-        tag2="Optional second topic",
-        tag3="Optional third topic",
+        tag="Optional topic to scope the problem",
+        difficulty="Optional difficulty (Easy/Medium/Hard)",
     )
-    @app_commands.autocomplete(
-        tag1=_tag_autocomplete, tag2=_tag_autocomplete, tag3=_tag_autocomplete
-    )
+    @app_commands.autocomplete(tag=_tag_autocomplete)
     @app_commands.guild_only()
     @requires_progsuvian()
     async def leet(
         self,
         interaction: discord.Interaction,
-        tag1: str | None = None,
-        tag2: str | None = None,
-        tag3: str | None = None,
+        tag: str | None = None,
+        difficulty: Literal["Easy", "Medium", "Hard"] | None = None,
     ) -> None:
-        """Start a /leet session: gate, pick a problem, open a private thread."""
+        """Start a /leet session: gate, pick a problem, open a private thread.
+
+        Both ``tag`` and ``difficulty`` are optional and combine (AND). With
+        neither, a random free problem from the pool is used.
+        """
         assert interaction.guild is not None
         guild = interaction.guild
         member = interaction.user
@@ -917,28 +931,33 @@ class Leet(commands.Cog):
             return
         solved_slugs = {r.get("titleSlug") for r in recent if r.get("titleSlug")}
 
-        # Resolve requested tags (slug from autocomplete, or typed name/slug).
-        requested = [t for t in (tag1, tag2, tag3) if t]
-        tag_slugs: list[str] = []
-        for raw in requested:
-            slug = leetcode_tags.normalize_tag(raw)
-            if slug is None:
+        # Resolve the optional tag (slug from autocomplete, or typed name/slug).
+        tag_slug: str | None = None
+        if tag:
+            tag_slug = leetcode_tags.normalize_tag(tag)
+            if tag_slug is None:
                 await interaction.followup.send(
-                    f"`{raw}` isn't a known leetcode topic. start typing to pick "
+                    f"`{tag}` isn't a known leetcode topic. start typing to pick "
                     "one from the list.",
                     ephemeral=True,
                 )
                 return
-            if slug not in tag_slugs:
-                tag_slugs.append(slug)
-        tag_slugs = tag_slugs[:LEET_MAX_TAGS]
+        # LeetCode's difficulty filter is upper-cased (EASY/MEDIUM/HARD).
+        diff_filter = difficulty.upper() if difficulty else None
 
-        if tag_slugs:
-            problem = await self._pick_tagged_problem(tag_slugs, solved_slugs)
+        if tag_slug or diff_filter:
+            problem = await self._pick_filtered_problem(
+                tag_slug, diff_filter, solved_slugs
+            )
             if problem is None:
-                pretty = ", ".join(f"`{s}`" for s in tag_slugs)
+                parts = []
+                if tag_slug:
+                    parts.append(f"topic `{tag_slug}`")
+                if difficulty:
+                    parts.append(f"**{difficulty}** difficulty")
                 await interaction.followup.send(
-                    f"no free problems match {pretty} together. try dropping a tag.",
+                    f"no free problems match {' + '.join(parts)}. try a different "
+                    "combo.",
                     ephemeral=True,
                 )
                 return

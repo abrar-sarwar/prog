@@ -220,7 +220,7 @@ def parse_daily_challenge(
 
 def parse_question_list(data: Mapping[str, object]) -> list[LeetProblem]:
     """Parse a ``problemsetQuestionList`` GraphQL ``data`` object into free
-    problems (drops ``paidOnly`` rows; difficulty is already Easy/Medium/Hard)."""
+    problems (drops ``isPaidOnly`` rows; difficulty is already Easy/Medium/Hard)."""
     node = (
         data.get("problemsetQuestionList") if isinstance(data, Mapping) else None
     )
@@ -231,7 +231,7 @@ def parse_question_list(data: Mapping[str, object]) -> list[LeetProblem]:
         return []
     out: list[LeetProblem] = []
     for q in questions:
-        if not isinstance(q, Mapping) or q.get("paidOnly"):
+        if not isinstance(q, Mapping) or q.get("isPaidOnly"):
             continue
         slug = q.get("titleSlug")
         title = q.get("title")
