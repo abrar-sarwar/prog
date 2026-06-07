@@ -137,6 +137,8 @@ gate fails open and anyone can use them.
 | `/setup-progsuvian <role>` | Set the progsuvian base role. |
 | `/setup-leaderboard-channel <channel>` | Where the persistent leaderboard image lives. |
 | `/setup-levelup-channel <channel>` | Where level-up announcements are posted. |
+| `/disable-levelup-message` | Stop posting level-up announcements (XP and roles still apply). |
+| `/enable-levelup-message` | Resume posting level-up announcements. |
 | `/blacklist-channel <channel>` | Toggle a channel's XP-blacklist status. |
 | `/set-channel-multiplier <channel> <multiplier>` | Set or, with `1.0`, remove the channel's XP multiplier. |
 | `/set-role-multiplier <role> <multiplier>` | Set or, with `1.0`, remove the role's XP multiplier. |

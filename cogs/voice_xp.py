@@ -151,7 +151,8 @@ class VoiceXP(commands.Cog):
 
         if change.leveled_up:
             suppress = (
-                change.new_level >= LEVEL_CAP and aura_already_fired
+                not config.level_up_announcements_enabled
+                or (change.new_level >= LEVEL_CAP and aura_already_fired)
             )
             if not suppress:
                 await self._announce_level_up(

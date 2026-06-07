@@ -114,6 +114,7 @@ class MessageXP(commands.Cog):
             ):
                 change.user.aura_message_fired = True
             level_up_channel_id = config.level_up_channel_id
+            announcements_enabled = config.level_up_announcements_enabled
             await session.commit()
 
         log.info(
@@ -142,7 +143,8 @@ class MessageXP(commands.Cog):
             # Aura template is the only one for level 100, and per spec we
             # never re-fire it.
             suppress = (
-                change.new_level >= LEVEL_CAP and aura_already_fired
+                not announcements_enabled
+                or (change.new_level >= LEVEL_CAP and aura_already_fired)
             )
             if not suppress:
                 await self._announce_level_up(

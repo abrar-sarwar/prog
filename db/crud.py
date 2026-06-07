@@ -119,6 +119,18 @@ async def set_xp_enabled(
     return config
 
 
+async def set_level_up_announcements_enabled(
+    session: AsyncSession, guild_id: int, enabled: bool
+) -> GuildConfig:
+    """Turn level-up announcement messages on or off for a guild.
+
+    Gates only the announcement post; XP, levels, and ladder-role rewards keep
+    working regardless."""
+    config = await get_or_create_guild_config(session, guild_id)
+    config.level_up_announcements_enabled = enabled
+    return config
+
+
 async def set_level_up_channel(
     session: AsyncSession, guild_id: int, channel_id: int | None
 ) -> GuildConfig:

@@ -212,6 +212,9 @@ class Admin(commands.Cog):
                 )
                 await session.commit()
 
+        # Respect the per-guild level-up-message switch (XP/roles still applied).
+        if not config.level_up_announcements_enabled:
+            return
         await self._post_announcement(
             member, action.message_level, level_up_channel_id
         )
@@ -636,6 +639,62 @@ class Admin(commands.Cog):
         )
 
     @app_commands.command(
+        name="disable-levelup-message",
+        description="Stop the bot from posting level-up announcement messages",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def disable_levelup_message(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Turn off level-up announcements (XP and roles keep working)."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            await crud.set_level_up_announcements_enabled(
+                session, interaction.guild.id, False
+            )
+            await session.commit()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Level-up messages disabled",
+                description=(
+                    "The bot will no longer post level-up announcements. Members "
+                    "still earn XP, level up, and get their ladder roles. Turn "
+                    "them back on with `/enable-levelup-message`."
+                ),
+                color=discord.Color.blurple(),
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="enable-levelup-message",
+        description="Resume posting level-up announcement messages",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def enable_levelup_message(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Turn level-up announcements back on."""
+        assert interaction.guild is not None
+        async with get_session_factory()() as session:
+            await crud.set_level_up_announcements_enabled(
+                session, interaction.guild.id, True
+            )
+            await session.commit()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Level-up messages enabled",
+                description="The bot will post level-up announcements again.",
+                color=discord.Color.blurple(),
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
         name="setup-welcome-channel",
         description="Set where welcome messages post when members join (opts in)",
     )
@@ -971,8 +1030,12 @@ class Admin(commands.Cog):
         )
 
         # Channels
+        levelup_msgs = (
+            "on" if config.level_up_announcements_enabled else "**off**"
+        )
         ch_lines = [
-            f"Level-up: {_format_channel(guild, config.level_up_channel_id)}",
+            f"Level-up: {_format_channel(guild, config.level_up_channel_id)} "
+            f"(messages: {levelup_msgs})",
             f"Leaderboard: {_format_channel(guild, config.leaderboard_channel_id)}",
         ]
         if config.leaderboard_message_id is not None:

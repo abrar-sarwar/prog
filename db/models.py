@@ -119,6 +119,12 @@ class GuildConfig(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     level_up_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Level-up announcements are on by default; /disable-levelup-message flips
+    # this off (and /enable-levelup-message back on). It gates only the
+    # announcement post - XP, levels, and ladder-role rewards still apply.
+    level_up_announcements_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     leaderboard_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     leaderboard_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     progsuvian_role_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
