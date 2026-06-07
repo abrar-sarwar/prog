@@ -350,3 +350,79 @@ def test_find_daily_solve_today_accepts_today_rejects_yesterday():
         "two-sum", today_start, [{"titleSlug": "two-sum", "timestamp": "999999"}]
     )
     assert miss is None
+
+
+def test_parse_daily_challenge_reads_date_and_problem():
+    from core.leetcode_problems import parse_daily_challenge
+
+    data = {
+        "activeDailyCodingChallengeQuestion": {
+            "date": "2026-06-06",
+            "link": "/problems/two-sum/",
+            "question": {
+                "titleSlug": "two-sum",
+                "title": "Two Sum",
+                "difficulty": "Easy",
+            },
+        }
+    }
+    parsed = parse_daily_challenge(data)
+    assert parsed is not None
+    date_str, problem = parsed
+    assert date_str == "2026-06-06"
+    assert problem.slug == "two-sum"
+    assert problem.title == "Two Sum"
+    assert problem.difficulty == "Easy"
+
+
+def test_parse_daily_challenge_handles_garbage():
+    from core.leetcode_problems import parse_daily_challenge
+
+    assert parse_daily_challenge({}) is None
+    assert parse_daily_challenge({"activeDailyCodingChallengeQuestion": None}) is None
+    assert parse_daily_challenge(
+        {"activeDailyCodingChallengeQuestion": {"date": "x", "question": {}}}
+    ) is None
+    assert parse_daily_challenge(
+        {"activeDailyCodingChallengeQuestion": {"date": "", "question": {"titleSlug": "two-sum", "title": "Two Sum"}}}
+    ) is None
+
+
+def test_parse_question_list_filters_premium_and_keeps_free():
+    from core.leetcode_problems import parse_question_list, parse_question_total
+
+    data = {
+        "problemsetQuestionList": {
+            "total": 2,
+            "questions": [
+                {"title": "Two Sum", "titleSlug": "two-sum", "difficulty": "Easy", "paidOnly": False},
+                {"title": "Paid", "titleSlug": "paid", "difficulty": "Hard", "paidOnly": True},
+            ],
+        }
+    }
+    problems = parse_question_list(data)
+    assert [p.slug for p in problems] == ["two-sum"]
+    assert parse_question_total(data) == 2
+
+
+def test_parse_question_list_handles_garbage():
+    from core.leetcode_problems import parse_question_list, parse_question_total
+
+    assert parse_question_list({}) == []
+    assert parse_question_list({"problemsetQuestionList": None}) == []
+    assert parse_question_list({"problemsetQuestionList": {"questions": "nope"}}) == []
+    assert parse_question_total({}) == 0
+    assert parse_question_total({"problemsetQuestionList": {}}) == 0
+
+
+def test_daily_cache_round_trips_by_date():
+    from core.leetcode_problems import (
+        LeetProblem,
+        get_cached_daily,
+        set_cached_daily,
+    )
+
+    assert get_cached_daily("2099-01-02") is None
+    set_cached_daily("2099-01-01", LeetProblem("two-sum", "Two Sum", "Easy"))
+    assert get_cached_daily("2099-01-01").slug == "two-sum"
+    assert get_cached_daily("2099-01-02") is None  # stale date misses

@@ -184,3 +184,90 @@ def pool_size() -> int:
 def replace_pool(problems: Iterable[LeetProblem]) -> bool:
     """Swap the live pool's contents (no-op on empty). Returns True if replaced."""
     return _pool.replace(problems)
+
+
+def parse_daily_challenge(
+    data: Mapping[str, object],
+) -> tuple[str, LeetProblem] | None:
+    """Parse an ``activeDailyCodingChallengeQuestion`` GraphQL ``data`` object.
+
+    Returns ``(date_str, LeetProblem)`` or None for a malformed payload.
+    """
+    node = (
+        data.get("activeDailyCodingChallengeQuestion")
+        if isinstance(data, Mapping)
+        else None
+    )
+    if not isinstance(node, Mapping):
+        return None
+    date_str = node.get("date")
+    question = node.get("question")
+    question = question if isinstance(question, Mapping) else {}
+    slug = question.get("titleSlug")
+    title = question.get("title")
+    if (
+        not isinstance(date_str, str)
+        or not date_str
+        or not isinstance(slug, str)
+        or not isinstance(title, str)
+        or not slug
+    ):
+        return None
+    difficulty = question.get("difficulty")
+    difficulty = difficulty if isinstance(difficulty, str) and difficulty else "Unknown"
+    return date_str, LeetProblem(slug, title, difficulty)
+
+
+def parse_question_list(data: Mapping[str, object]) -> list[LeetProblem]:
+    """Parse a ``problemsetQuestionList`` GraphQL ``data`` object into free
+    problems (drops ``paidOnly`` rows; difficulty is already Easy/Medium/Hard)."""
+    node = (
+        data.get("problemsetQuestionList") if isinstance(data, Mapping) else None
+    )
+    if not isinstance(node, Mapping):
+        return []
+    questions = node.get("questions")
+    if not isinstance(questions, Sequence):
+        return []
+    out: list[LeetProblem] = []
+    for q in questions:
+        if not isinstance(q, Mapping) or q.get("paidOnly"):
+            continue
+        slug = q.get("titleSlug")
+        title = q.get("title")
+        if not isinstance(slug, str) or not isinstance(title, str) or not slug:
+            continue
+        difficulty = q.get("difficulty")
+        difficulty = (
+            difficulty if isinstance(difficulty, str) and difficulty else "Unknown"
+        )
+        out.append(LeetProblem(slug, title, difficulty))
+    return out
+
+
+def parse_question_total(data: Mapping[str, object]) -> int:
+    """Return the ``total`` count from a ``problemsetQuestionList`` payload."""
+    node = (
+        data.get("problemsetQuestionList") if isinstance(data, Mapping) else None
+    )
+    if not isinstance(node, Mapping):
+        return 0
+    total = node.get("total")
+    return int(total) if isinstance(total, int) else 0
+
+
+# per-process daily-challenge cache, keyed by the LeetCode-reported date string
+_daily_cache: tuple[str, LeetProblem] | None = None
+
+
+def get_cached_daily(today_str: str) -> LeetProblem | None:
+    """Return the cached daily problem if it matches ``today_str``, else None."""
+    if _daily_cache is not None and _daily_cache[0] == today_str:
+        return _daily_cache[1]
+    return None
+
+
+def set_cached_daily(date_str: str, problem: LeetProblem) -> None:
+    """Cache the daily problem for ``date_str`` (replaces any prior entry)."""
+    global _daily_cache
+    _daily_cache = (date_str, problem)
